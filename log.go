@@ -1,52 +1,18 @@
 package minimalsigner
 
 import (
-	"github.com/btcsuite/btcd/connmgr"
 	"github.com/btcsuite/btclog"
-	"github.com/lightninglabs/neutrino"
-	sphinx "github.com/lightningnetwork/lightning-onion"
 	"github.com/lightningnetwork/lnd/autopilot"
 	"github.com/lightningnetwork/lnd/build"
-	"github.com/lightningnetwork/lnd/chainntnfs"
 	"github.com/lightningnetwork/lnd/chainreg"
-	"github.com/lightningnetwork/lnd/chanacceptor"
-	"github.com/lightningnetwork/lnd/chanbackup"
-	"github.com/lightningnetwork/lnd/chanfitness"
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/channelnotifier"
-	"github.com/lightningnetwork/lnd/cluster"
-	"github.com/lightningnetwork/lnd/contractcourt"
-	"github.com/lightningnetwork/lnd/discovery"
-	"github.com/lightningnetwork/lnd/funding"
 	"github.com/lightningnetwork/lnd/healthcheck"
-	"github.com/lightningnetwork/lnd/htlcswitch"
-	"github.com/lightningnetwork/lnd/invoices"
-	"github.com/lightningnetwork/lnd/lnrpc/autopilotrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/chainrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/devrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/neutrinorpc"
-	"github.com/lightningnetwork/lnd/lnrpc/peersrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/verrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwallet/btcwallet"
-	"github.com/lightningnetwork/lnd/lnwallet/chancloser"
-	"github.com/lightningnetwork/lnd/lnwallet/chanfunding"
-	"github.com/lightningnetwork/lnd/lnwallet/rpcwallet"
-	"github.com/lightningnetwork/lnd/monitoring"
-	"github.com/lightningnetwork/lnd/netann"
-	"github.com/lightningnetwork/lnd/peer"
-	"github.com/lightningnetwork/lnd/peernotifier"
-	"github.com/lightningnetwork/lnd/routing"
 	"github.com/lightningnetwork/lnd/rpcperms"
 	"github.com/lightningnetwork/lnd/signal"
-	"github.com/lightningnetwork/lnd/sweep"
 	"github.com/lightningnetwork/lnd/tor"
-	"github.com/lightningnetwork/lnd/watchtower"
-	"github.com/lightningnetwork/lnd/watchtower/wtclient"
 )
 
 // replaceableLogger is a thin wrapper around a logger that is used so the
@@ -128,50 +94,14 @@ func SetupLoggers(root *build.RotatingLogWriter, interceptor signal.Interceptor)
 	autopilot.UseLogger(atplLog)
 
 	AddSubLogger(root, "LNWL", interceptor, lnwallet.UseLogger)
-	AddSubLogger(root, "DISC", interceptor, discovery.UseLogger)
-	AddSubLogger(root, "NTFN", interceptor, chainntnfs.UseLogger)
-	AddSubLogger(root, "CHDB", interceptor, channeldb.UseLogger)
-	AddSubLogger(root, "HSWC", interceptor, htlcswitch.UseLogger)
-	AddSubLogger(root, "CMGR", interceptor, connmgr.UseLogger)
-	AddSubLogger(root, "BTCN", interceptor, neutrino.UseLogger)
-	AddSubLogger(root, "CNCT", interceptor, contractcourt.UseLogger)
-	AddSubLogger(root, "UTXN", interceptor, contractcourt.UseNurseryLogger)
-	AddSubLogger(root, "BRAR", interceptor, contractcourt.UseBreachLogger)
-	AddSubLogger(root, "SPHX", interceptor, sphinx.UseLogger)
-	AddSubLogger(root, "SWPR", interceptor, sweep.UseLogger)
 	AddSubLogger(root, "SGNR", interceptor, signrpc.UseLogger)
 	AddSubLogger(root, "WLKT", interceptor, walletrpc.UseLogger)
-	AddSubLogger(root, "ARPC", interceptor, autopilotrpc.UseLogger)
-	AddSubLogger(root, "NRPC", interceptor, neutrinorpc.UseLogger)
-	AddSubLogger(root, "DRPC", interceptor, devrpc.UseLogger)
-	AddSubLogger(root, "INVC", interceptor, invoices.UseLogger)
-	AddSubLogger(root, "NANN", interceptor, netann.UseLogger)
-	AddSubLogger(root, "WTWR", interceptor, watchtower.UseLogger)
-	AddSubLogger(root, "NTFR", interceptor, chainrpc.UseLogger)
-	AddSubLogger(root, "IRPC", interceptor, invoicesrpc.UseLogger)
-	AddSubLogger(root, "CHNF", interceptor, channelnotifier.UseLogger)
-	AddSubLogger(root, "CHBU", interceptor, chanbackup.UseLogger)
-	AddSubLogger(root, "PROM", interceptor, monitoring.UseLogger)
-	AddSubLogger(root, "WTCL", interceptor, wtclient.UseLogger)
-	AddSubLogger(root, "PRNF", interceptor, peernotifier.UseLogger)
-	AddSubLogger(root, "CHFD", interceptor, chanfunding.UseLogger)
-	AddSubLogger(root, "PEER", interceptor, peer.UseLogger)
-	AddSubLogger(root, "CHCL", interceptor, chancloser.UseLogger)
 
-	AddSubLogger(root, routing.Subsystem, interceptor, routing.UseLogger)
-	AddSubLogger(root, routerrpc.Subsystem, interceptor, routerrpc.UseLogger)
-	AddSubLogger(root, chanfitness.Subsystem, interceptor, chanfitness.UseLogger)
-	AddSubLogger(root, verrpc.Subsystem, interceptor, verrpc.UseLogger)
 	AddSubLogger(root, healthcheck.Subsystem, interceptor, healthcheck.UseLogger)
 	AddSubLogger(root, chainreg.Subsystem, interceptor, chainreg.UseLogger)
-	AddSubLogger(root, chanacceptor.Subsystem, interceptor, chanacceptor.UseLogger)
-	AddSubLogger(root, funding.Subsystem, interceptor, funding.UseLogger)
-	AddSubLogger(root, cluster.Subsystem, interceptor, cluster.UseLogger)
 	AddSubLogger(root, rpcperms.Subsystem, interceptor, rpcperms.UseLogger)
 	AddSubLogger(root, tor.Subsystem, interceptor, tor.UseLogger)
 	AddSubLogger(root, btcwallet.Subsystem, interceptor, btcwallet.UseLogger)
-	AddSubLogger(root, rpcwallet.Subsystem, interceptor, rpcwallet.UseLogger)
-	AddSubLogger(root, peersrpc.Subsystem, interceptor, peersrpc.UseLogger)
 }
 
 // AddSubLogger is a helper method to conveniently create and register the
