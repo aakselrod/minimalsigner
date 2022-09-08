@@ -49,48 +49,6 @@ type subRPCServerConfigs struct {
 	// also requests keys and addresses under control of the backing
 	// wallet.
 	WalletKitRPC *walletrpc.Config `group:"walletrpc" namespace:"walletrpc"`
-
-	// AutopilotRPC is a sub-RPC server that exposes methods on the running
-	// autopilot as a gRPC service.
-	AutopilotRPC *autopilotrpc.Config `group:"autopilotrpc" namespace:"autopilotrpc"`
-
-	// ChainRPC is a sub-RPC server that exposes functionality allowing a
-	// client to be notified of certain on-chain events (new blocks,
-	// confirmations, spends).
-	ChainRPC *chainrpc.Config `group:"chainrpc" namespace:"chainrpc"`
-
-	// InvoicesRPC is a sub-RPC server that exposes invoice related methods
-	// as a gRPC service.
-	InvoicesRPC *invoicesrpc.Config `group:"invoicesrpc" namespace:"invoicesrpc"`
-
-	// PeersRPC is a sub-RPC server that exposes peer related methods
-	// as a gRPC service.
-	PeersRPC *peersrpc.Config `group:"peersrpc" namespace:"peersrpc"`
-
-	// NeutrinoKitRPC is a sub-RPC server that exposes functionality allowing
-	// a client to interact with a running neutrino node.
-	NeutrinoKitRPC *neutrinorpc.Config `group:"neutrinorpc" namespace:"neutrinorpc"`
-
-	// RouterRPC is a sub-RPC server the exposes functionality that allows
-	// clients to send payments on the network, and perform Lightning
-	// payment related queries such as requests for estimates of off-chain
-	// fees.
-	RouterRPC *routerrpc.Config `group:"routerrpc" namespace:"routerrpc"`
-
-	// WatchtowerRPC is a sub-RPC server that exposes functionality allowing
-	// clients to monitor and control their embedded watchtower.
-	WatchtowerRPC *watchtowerrpc.Config `group:"watchtowerrpc" namespace:"watchtowerrpc"`
-
-	// WatchtowerClientRPC is a sub-RPC server that exposes functionality
-	// that allows clients to interact with the active watchtower client
-	// instance within lnd in order to add, remove, list registered client
-	// towers, etc.
-	WatchtowerClientRPC *wtclientrpc.Config `group:"wtclientrpc" namespace:"wtclientrpc"`
-
-	// DevRPC is a sub-RPC server that exposes functionality that allows
-	// developers manipulate LND state that is normally not possible.
-	// Should only be used for development purposes.
-	DevRPC *devrpc.Config `group:"devrpc" namespace:"devrpc"`
 }
 
 // PopulateDependencies attempts to iterate through all the sub-server configs
@@ -335,12 +293,6 @@ func (s *subRPCServerConfigs) PopulateDependencies(cfg *Config,
 				cfg)
 		}
 	}
-
-	// Populate routerrpc dependencies.
-	s.RouterRPC.NetworkDir = networkDir
-	s.RouterRPC.MacService = macService
-	s.RouterRPC.Router = chanRouter
-	s.RouterRPC.RouterBackend = routerBackend
 
 	return nil
 }

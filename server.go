@@ -49,7 +49,6 @@ import (
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnpeer"
 	"github.com/lightningnetwork/lnd/lnrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
 	"github.com/lightningnetwork/lnd/lnwallet/rpcwallet"
@@ -843,55 +842,15 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		return nil, err
 	}
 
-	// Instantiate mission control with config from the sub server.
-	//
-	// TODO(joostjager): When we are further in the process of moving to sub
-	// servers, the mission control instance itself can be moved there too.
-	routingConfig := routerrpc.GetRoutingConfig(cfg.SubRPCServers.RouterRPC)
-
-	estimatorCfg := routing.ProbabilityEstimatorCfg{
-		AprioriHopProbability: routingConfig.AprioriHopProbability,
-		PenaltyHalfLife:       routingConfig.PenaltyHalfLife,
-		AprioriWeight:         routingConfig.AprioriWeight,
-	}
-
-	s.missionControl, err = routing.NewMissionControl(
-		dbs.ChanStateDB, selfNode.PubKeyBytes,
-		&routing.MissionControlConfig{
-			ProbabilityEstimatorCfg: estimatorCfg,
-			MaxMcHistory:            routingConfig.MaxMcHistory,
-			McFlushInterval:         routingConfig.McFlushInterval,
-			MinFailureRelaxInterval: routing.DefaultMinFailureRelaxInterval,
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("can't create mission control: %v", err)
-	}
-
-	srvrLog.Debugf("Instantiating payment session source with config: "+
-		"AttemptCost=%v + %v%%, MinRouteProbability=%v",
-		int64(routingConfig.AttemptCost),
-		float64(routingConfig.AttemptCostPPM)/10000,
-		routingConfig.MinRouteProbability)
-
-	pathFindingConfig := routing.PathFindingConfig{
-		AttemptCost: lnwire.NewMSatFromSatoshis(
-			routingConfig.AttemptCost,
-		),
-		AttemptCostPPM: routingConfig.AttemptCostPPM,
-		MinProbability: routingConfig.MinRouteProbability,
-	}
-
 	sourceNode, err := chanGraph.SourceNode()
 	if err != nil {
 		return nil, fmt.Errorf("error getting source node: %v", err)
 	}
 	paymentSessionSource := &routing.SessionSource{
-		Graph:             chanGraph,
-		SourceNode:        sourceNode,
-		MissionControl:    s.missionControl,
-		GetLink:           s.htlcSwitch.GetLinkByShortID,
-		PathFindingConfig: pathFindingConfig,
+		Graph:          chanGraph,
+		SourceNode:     sourceNode,
+		MissionControl: s.missionControl,
+		GetLink:        s.htlcSwitch.GetLinkByShortID,
 	}
 
 	paymentControl := channeldb.NewPaymentControl(dbs.ChanStateDB)
@@ -915,7 +874,6 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		GetLink:             s.htlcSwitch.GetLinkByShortID,
 		AssumeChannelValid:  cfg.Routing.AssumeChannelValid,
 		NextPaymentID:       sequencer.NextID,
-		PathFindingConfig:   pathFindingConfig,
 		Clock:               clock.NewDefaultClock(),
 		StrictZombiePruning: strictPruning,
 		IsAlias:             aliasmgr.IsAlias,
