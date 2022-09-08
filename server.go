@@ -669,11 +669,6 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		s.cfg.RequireInterceptor,
 	)
 
-	s.witnessBeacon = newPreimageBeacon(
-		dbs.ChanStateDB.NewWitnessCache(),
-		s.interceptableSwitch.ForwardPacket,
-	)
-
 	chanStatusMgrCfg := &netann.ChanStatusConfig{
 		ChanStatusSampleInterval: cfg.ChanStatusSampleInterval,
 		ChanEnableTimeout:        cfg.ChanEnableTimeout,
@@ -1406,26 +1401,6 @@ func newServer(cfg *Config, listenAddrs []net.Addr,
 		return nil, err
 	}
 
-	// Next, we'll assemble the sub-system that will maintain an on-disk
-	// static backup of the latest channel state.
-	chanNotifier := &channelNotifier{
-		chanNotifier: s.channelNotifier,
-		addrs:        dbs.ChanStateDB,
-	}
-	backupFile := chanbackup.NewMultiFile(cfg.BackupFilePath)
-	startingChans, err := chanbackup.FetchStaticChanBackups(
-		s.chanStateDB, s.addrSource,
-	)
-	if err != nil {
-		return nil, err
-	}
-	s.chanSubSwapper, err = chanbackup.NewSubSwapper(
-		startingChans, chanNotifier, s.cc.KeyRing, backupFile,
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	// Assemble a peer notifier which will provide clients with subscriptions
 	// to peer online and offline events.
 	s.peerNotifier = peernotifier.New()
@@ -1923,44 +1898,6 @@ func (s *server) Start() error {
 			s.missionControl.StopStoreTicker()
 			return nil
 		})
-
-		// Before we start the connMgr, we'll check to see if we have
-		// any backups to recover. We do this now as we want to ensure
-		// that have all the information we need to handle channel
-		// recovery _before_ we even accept connections from any peers.
-		chanRestorer := &chanDBRestorer{
-			db:         s.chanStateDB,
-			secretKeys: s.cc.KeyRing,
-			chainArb:   s.chainArb,
-		}
-		if len(s.chansToRestore.PackedSingleChanBackups) != 0 {
-			err := chanbackup.UnpackAndRecoverSingles(
-				s.chansToRestore.PackedSingleChanBackups,
-				s.cc.KeyRing, chanRestorer, s,
-			)
-			if err != nil {
-				startErr = fmt.Errorf("unable to unpack single "+
-					"backups: %v", err)
-				return
-			}
-		}
-		if len(s.chansToRestore.PackedMultiChanBackup) != 0 {
-			err := chanbackup.UnpackAndRecoverMulti(
-				s.chansToRestore.PackedMultiChanBackup,
-				s.cc.KeyRing, chanRestorer, s,
-			)
-			if err != nil {
-				startErr = fmt.Errorf("unable to unpack chan "+
-					"backup: %v", err)
-				return
-			}
-		}
-
-		if err := s.chanSubSwapper.Start(); err != nil {
-			startErr = err
-			return
-		}
-		cleanup = cleanup.add(s.chanSubSwapper.Stop)
 
 		if s.torController != nil {
 			if err := s.createNewHiddenService(); err != nil {
