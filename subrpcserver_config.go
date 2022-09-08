@@ -2,35 +2,14 @@ package minimalsigner
 
 import (
 	"fmt"
-	"net"
 	"reflect"
 
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btclog"
-	"github.com/lightningnetwork/lnd/autopilot"
 	"github.com/lightningnetwork/lnd/chainreg"
-	"github.com/lightningnetwork/lnd/channeldb"
-	"github.com/lightningnetwork/lnd/htlcswitch"
-	"github.com/lightningnetwork/lnd/invoices"
-	"github.com/lightningnetwork/lnd/lncfg"
-	"github.com/lightningnetwork/lnd/lnrpc/autopilotrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/chainrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/devrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/invoicesrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/neutrinorpc"
-	"github.com/lightningnetwork/lnd/lnrpc/peersrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/watchtowerrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/wtclientrpc"
-	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/macaroons"
-	"github.com/lightningnetwork/lnd/netann"
-	"github.com/lightningnetwork/lnd/routing"
-	"github.com/lightningnetwork/lnd/sweep"
-	"github.com/lightningnetwork/lnd/watchtower"
-	"github.com/lightningnetwork/lnd/watchtower/wtclient"
 )
 
 // subRPCServerConfigs is special sub-config in the main configuration that
@@ -60,27 +39,8 @@ type subRPCServerConfigs struct {
 func (s *subRPCServerConfigs) PopulateDependencies(cfg *Config,
 	cc *chainreg.ChainControl,
 	networkDir string, macService *macaroons.Service,
-	atpl *autopilot.Manager,
-	invoiceRegistry *invoices.InvoiceRegistry,
-	htlcSwitch *htlcswitch.Switch,
 	activeNetParams *chaincfg.Params,
-	chanRouter *routing.ChannelRouter,
-	routerBackend *routerrpc.RouterBackend,
-	nodeSigner *netann.NodeSigner,
-	graphDB *channeldb.ChannelGraph,
-	chanStateDB *channeldb.ChannelStateDB,
-	sweeper *sweep.UtxoSweeper,
-	tower *watchtower.Standalone,
-	towerClient wtclient.Client,
-	anchorTowerClient wtclient.Client,
-	tcpResolver lncfg.TCPResolver,
-	genInvoiceFeatures func() *lnwire.FeatureVector,
-	genAmpInvoiceFeatures func() *lnwire.FeatureVector,
-	getNodeAnnouncement func() (lnwire.NodeAnnouncement, error),
-	updateNodeAnnouncement func(modifiers ...netann.NodeAnnModifier) error,
-	parseAddr func(addr string) (net.Addr, error),
-	rpcLogger btclog.Logger,
-	getAlias func(lnwire.ChannelID) (lnwire.ShortChannelID, error)) error {
+	rpcLogger btclog.Logger) error {
 
 	// First, we'll use reflect to obtain a version of the config struct
 	// that allows us to programmatically inspect its fields.
@@ -143,9 +103,6 @@ func (s *subRPCServerConfigs) PopulateDependencies(cfg *Config,
 			subCfgValue.FieldByName("KeyRing").Set(
 				reflect.ValueOf(cc.KeyRing),
 			)
-			subCfgValue.FieldByName("Sweeper").Set(
-				reflect.ValueOf(sweeper),
-			)
 			subCfgValue.FieldByName("Chain").Set(
 				reflect.ValueOf(cc.ChainIO),
 			)
@@ -154,138 +111,6 @@ func (s *subRPCServerConfigs) PopulateDependencies(cfg *Config,
 			)
 			subCfgValue.FieldByName("CurrentNumAnchorChans").Set(
 				reflect.ValueOf(cc.Wallet.CurrentNumAnchorChans),
-			)
-
-		case *autopilotrpc.Config:
-			subCfgValue := extractReflectValue(subCfg)
-
-			subCfgValue.FieldByName("Manager").Set(
-				reflect.ValueOf(atpl),
-			)
-
-		case *chainrpc.Config:
-			subCfgValue := extractReflectValue(subCfg)
-
-			subCfgValue.FieldByName("NetworkDir").Set(
-				reflect.ValueOf(networkDir),
-			)
-			subCfgValue.FieldByName("MacService").Set(
-				reflect.ValueOf(macService),
-			)
-			subCfgValue.FieldByName("ChainNotifier").Set(
-				reflect.ValueOf(cc.ChainNotifier),
-			)
-
-		case *invoicesrpc.Config:
-			subCfgValue := extractReflectValue(subCfg)
-
-			subCfgValue.FieldByName("NetworkDir").Set(
-				reflect.ValueOf(networkDir),
-			)
-			subCfgValue.FieldByName("MacService").Set(
-				reflect.ValueOf(macService),
-			)
-			subCfgValue.FieldByName("InvoiceRegistry").Set(
-				reflect.ValueOf(invoiceRegistry),
-			)
-			subCfgValue.FieldByName("IsChannelActive").Set(
-				reflect.ValueOf(htlcSwitch.HasActiveLink),
-			)
-			subCfgValue.FieldByName("ChainParams").Set(
-				reflect.ValueOf(activeNetParams),
-			)
-			subCfgValue.FieldByName("NodeSigner").Set(
-				reflect.ValueOf(nodeSigner),
-			)
-			defaultDelta := cfg.Bitcoin.TimeLockDelta
-			if cfg.registeredChains.PrimaryChain() == chainreg.LitecoinChain {
-				defaultDelta = cfg.Litecoin.TimeLockDelta
-			}
-			subCfgValue.FieldByName("DefaultCLTVExpiry").Set(
-				reflect.ValueOf(defaultDelta),
-			)
-			subCfgValue.FieldByName("GraphDB").Set(
-				reflect.ValueOf(graphDB),
-			)
-			subCfgValue.FieldByName("ChanStateDB").Set(
-				reflect.ValueOf(chanStateDB),
-			)
-			subCfgValue.FieldByName("GenInvoiceFeatures").Set(
-				reflect.ValueOf(genInvoiceFeatures),
-			)
-			subCfgValue.FieldByName("GenAmpInvoiceFeatures").Set(
-				reflect.ValueOf(genAmpInvoiceFeatures),
-			)
-			subCfgValue.FieldByName("GetAlias").Set(
-				reflect.ValueOf(getAlias),
-			)
-
-		case *neutrinorpc.Config:
-			subCfgValue := extractReflectValue(subCfg)
-
-			subCfgValue.FieldByName("NeutrinoCS").Set(
-				reflect.ValueOf(cc.Cfg.NeutrinoCS),
-			)
-
-		// RouterRPC isn't conditionally compiled and doesn't need to be
-		// populated using reflection.
-		case *routerrpc.Config:
-
-		case *watchtowerrpc.Config:
-			subCfgValue := extractReflectValue(subCfg)
-
-			subCfgValue.FieldByName("Active").Set(
-				reflect.ValueOf(tower != nil),
-			)
-			subCfgValue.FieldByName("Tower").Set(
-				reflect.ValueOf(tower),
-			)
-
-		case *wtclientrpc.Config:
-			subCfgValue := extractReflectValue(subCfg)
-
-			if towerClient != nil && anchorTowerClient != nil {
-				subCfgValue.FieldByName("Active").Set(
-					reflect.ValueOf(towerClient != nil),
-				)
-				subCfgValue.FieldByName("Client").Set(
-					reflect.ValueOf(towerClient),
-				)
-				subCfgValue.FieldByName("AnchorClient").Set(
-					reflect.ValueOf(anchorTowerClient),
-				)
-			}
-			subCfgValue.FieldByName("Resolver").Set(
-				reflect.ValueOf(tcpResolver),
-			)
-			subCfgValue.FieldByName("Log").Set(
-				reflect.ValueOf(rpcLogger),
-			)
-
-		case *devrpc.Config:
-			subCfgValue := extractReflectValue(subCfg)
-
-			subCfgValue.FieldByName("ActiveNetParams").Set(
-				reflect.ValueOf(activeNetParams),
-			)
-
-			subCfgValue.FieldByName("GraphDB").Set(
-				reflect.ValueOf(graphDB),
-			)
-
-		case *peersrpc.Config:
-			subCfgValue := extractReflectValue(subCfg)
-
-			subCfgValue.FieldByName("GetNodeAnnouncement").Set(
-				reflect.ValueOf(getNodeAnnouncement),
-			)
-
-			subCfgValue.FieldByName("ParseAddr").Set(
-				reflect.ValueOf(parseAddr),
-			)
-
-			subCfgValue.FieldByName("UpdateNodeAnnouncement").Set(
-				reflect.ValueOf(updateNodeAnnouncement),
 			)
 
 		default:

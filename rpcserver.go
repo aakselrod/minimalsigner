@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"net/http"
 	"runtime"
 	"sort"
@@ -727,21 +726,6 @@ func (r *rpcServer) addDeps(s *server, macService *macaroons.Service,
 		SetChannelAuto: s.chanStatusMgr.RequestAuto,
 	}
 
-	genInvoiceFeatures := func() *lnwire.FeatureVector {
-		return s.featureMgr.Get(feature.SetInvoice)
-	}
-	genAmpInvoiceFeatures := func() *lnwire.FeatureVector {
-		return s.featureMgr.Get(feature.SetInvoiceAmp)
-	}
-
-	getNodeAnnouncement := func() (lnwire.NodeAnnouncement, error) {
-		return s.genNodeAnnouncement(false)
-	}
-
-	parseAddr := func(addr string) (net.Addr, error) {
-		return parseAddr(addr, r.cfg.net)
-	}
-
 	var (
 		subServers     []lnrpc.SubServer
 		subServerPerms []lnrpc.MacaroonPerms
@@ -753,14 +737,8 @@ func (r *rpcServer) addDeps(s *server, macService *macaroons.Service,
 	//
 	// TODO(roasbeef): extend sub-sever config to have both (local vs remote) DB
 	err = subServerCgs.PopulateDependencies(
-		r.cfg, s.cc, r.cfg.networkDir, macService, atpl, invoiceRegistry,
-		s.htlcSwitch, r.cfg.ActiveNetParams.Params, s.chanRouter,
-		routerBackend, s.nodeSigner, s.graphDB, s.chanStateDB,
-		s.sweeper, tower, s.towerClient, s.anchorTowerClient,
-		r.cfg.net.ResolveTCPAddr, genInvoiceFeatures,
-		genAmpInvoiceFeatures, getNodeAnnouncement,
-		s.updateAndBrodcastSelfNode, parseAddr, rpcsLog,
-		s.aliasMgr.GetPeerAlias,
+		r.cfg, s.cc, r.cfg.networkDir, macService,
+		r.cfg.ActiveNetParams.Params, rpcsLog,
 	)
 	if err != nil {
 		return err
