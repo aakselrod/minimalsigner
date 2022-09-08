@@ -927,10 +927,6 @@ func ValidateConfig(cfg Config, interceptor signal.Interceptor, fileParser,
 		cfg.Autopilot.MaxChannelSize = int64(MaxFundingAmount)
 	}
 
-	if _, err := validateAtplCfg(cfg.Autopilot); err != nil {
-		return nil, mkErr("error validating autopilot: %v", err)
-	}
-
 	// Ensure that --maxchansize is properly handled when set by user.
 	// For non-Wumbo channels this limit remains 16777215 satoshis by default
 	// as specified in BOLT-02. For wumbo channels this limit is 1,000,000,000.

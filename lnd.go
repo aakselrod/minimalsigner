@@ -21,7 +21,6 @@ import (
 
 	"github.com/btcsuite/btcd/btcutil"
 	proxy "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
-	"github.com/lightningnetwork/lnd/autopilot"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/chanacceptor"
@@ -517,31 +516,11 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 		return mkErr("unable to create server: %v", err)
 	}
 
-	// Set up an autopilot manager from the current config. This will be
-	// used to manage the underlying autopilot agent, starting and stopping
-	// it at will.
-	atplCfg, err := initAutoPilot(
-		server, cfg.Autopilot, activeChainControl.MinHtlcIn,
-		cfg.ActiveNetParams,
-	)
-	if err != nil {
-		return mkErr("unable to initialize autopilot: %v", err)
-	}
-
-	atplManager, err := autopilot.NewManager(atplCfg)
-	if err != nil {
-		return mkErr("unable to create autopilot manager: %v", err)
-	}
-	if err := atplManager.Start(); err != nil {
-		return mkErr("unable to start autopilot manager: %v", err)
-	}
-	defer atplManager.Stop()
-
 	// Now we have created all dependencies necessary to populate and
 	// start the RPC server.
 	err = rpcServer.addDeps(
 		server, interceptorChain.MacaroonService(), cfg.SubRPCServers,
-		atplManager, server.invoices, tower, multiAcceptor,
+		nil, server.invoices, tower, multiAcceptor,
 	)
 	if err != nil {
 		return mkErr("unable to add deps to RPC server: %v", err)
@@ -609,12 +588,6 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 	// Now that the server has started, if the autopilot mode is currently
 	// active, then we'll start the autopilot agent immediately. It will be
 	// stopped together with the autopilot service.
-	if cfg.Autopilot.Active {
-		if err := atplManager.StartAgent(); err != nil {
-			return mkErr("unable to start autopilot agent: %v", err)
-		}
-	}
-
 	if cfg.Watchtower.Active {
 		if err := tower.Start(); err != nil {
 			return mkErr("unable to start watchtower: %v", err)
