@@ -23,7 +23,6 @@ import (
 	proxy "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
-	"github.com/lightningnetwork/lnd/chanacceptor"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lncfg"
@@ -495,26 +494,9 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 		}
 	}
 
-	// Initialize the MultiplexAcceptor. If lnd was started with the
-	// zero-conf feature bit, then this will be a ZeroConfAcceptor.
-	// Otherwise, this will be a ChainedAcceptor.
-	var multiAcceptor chanacceptor.MultiplexAcceptor
-	if cfg.ProtocolOptions.ZeroConf() {
-		multiAcceptor = chanacceptor.NewZeroConfAcceptor()
-	} else {
-		multiAcceptor = chanacceptor.NewChainedAcceptor()
-	}
-
 	// Set up the core server which will listen for incoming peer
 	// connections.
-	server, err := newServer(
-		cfg, cfg.Listeners, dbs, activeChainControl, &idKeyDesc,
-		activeChainControl.Cfg.WalletUnlockParams.ChansToRestore,
-		multiAcceptor, torController,
-	)
-	if err != nil {
-		return mkErr("unable to create server: %v", err)
-	}
+	server := newServer(cfg, dbs, activeChainControl, &idKeyDesc)
 
 	// Now we have created all dependencies necessary to populate and
 	// start the RPC server.

@@ -10,6 +10,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/macaroons"
+	"github.com/lightningnetwork/lnd/netann"
 )
 
 // subRPCServerConfigs is special sub-config in the main configuration that
@@ -39,7 +40,7 @@ type subRPCServerConfigs struct {
 func (s *subRPCServerConfigs) PopulateDependencies(cfg *Config,
 	cc *chainreg.ChainControl,
 	networkDir string, macService *macaroons.Service,
-	activeNetParams *chaincfg.Params,
+	nodeSigner *netann.NodeSigner, activeNetParams *chaincfg.Params,
 	rpcLogger btclog.Logger) error {
 
 	// First, we'll use reflect to obtain a version of the config struct

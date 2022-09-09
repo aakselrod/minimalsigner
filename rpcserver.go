@@ -8,12 +8,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -23,16 +20,12 @@ import (
 	"github.com/davecgh/go-spew/spew"
 	proxy "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/lightningnetwork/lnd/build"
-	"github.com/lightningnetwork/lnd/chanacceptor"
 	"github.com/lightningnetwork/lnd/labels"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/routerrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
-	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/macaroons"
-	"github.com/lightningnetwork/lnd/routing/route"
 	"github.com/lightningnetwork/lnd/rpcperms"
 	"github.com/lightningnetwork/lnd/signal"
 	"github.com/lightningnetwork/lnd/sweep"
@@ -569,22 +562,11 @@ type rpcServer struct {
 	subServers      []lnrpc.SubServer
 	subGrpcHandlers []lnrpc.GrpcHandler
 
-	// routerBackend contains the backend implementation of the router
-	// rpc sub server.
-	routerBackend *routerrpc.RouterBackend
-
-	// chanPredicate is used in the bidirectional ChannelAcceptor streaming
-	// method.
-	chanPredicate chanacceptor.MultiplexAcceptor
-
 	quit chan struct{}
 
 	// macService is the macaroon service that we need to mint new
 	// macaroons.
 	macService *macaroons.Service
-
-	// selfNode is our own pubkey.
-	selfNode route.Vertex
 
 	// interceptorChain is the interceptor added to our gRPC server.
 	interceptorChain *rpcperms.InterceptorChain
@@ -595,10 +577,6 @@ type rpcServer struct {
 
 	// interceptor is used to be able to request a shutdown
 	interceptor signal.Interceptor
-
-	graphCache        sync.RWMutex
-	describeGraphResp *lnrpc.ChannelGraph
-	graphCacheEvictor *time.Timer
 }
 
 // A compile time check to ensure that rpcServer fully implements the
@@ -650,7 +628,7 @@ func (r *rpcServer) addDeps(s *server, macService *macaroons.Service,
 	//
 	// TODO(roasbeef): extend sub-sever config to have both (local vs remote) DB
 	err := subServerCgs.PopulateDependencies(
-		r.cfg, s.cc, r.cfg.networkDir, macService,
+		r.cfg, s.cc, r.cfg.networkDir, macService, s.nodeSigner,
 		r.cfg.ActiveNetParams.Params, rpcsLog,
 	)
 	if err != nil {
@@ -719,23 +697,6 @@ func (r *rpcServer) addDeps(s *server, macService *macaroons.Service,
 	r.server = s
 	r.subServers = subServers
 	r.macService = macService
-	r.selfNode = selfNode.PubKeyBytes
-
-	graphCacheDuration := r.cfg.Caches.RPCGraphCacheDuration
-	if graphCacheDuration != 0 {
-		r.graphCacheEvictor = time.AfterFunc(graphCacheDuration, func() {
-			// Grab the mutex and purge the current populated
-			// describe graph response.
-			r.graphCache.Lock()
-			defer r.graphCache.Unlock()
-
-			r.describeGraphResp = nil
-
-			// Reset ourselves as well at the end so we run again
-			// after the duration.
-			r.graphCacheEvictor.Reset(graphCacheDuration)
-		})
-	}
 
 	return nil
 }
@@ -1472,121 +1433,6 @@ func (r *rpcServer) SignMessage(_ context.Context,
 	return &lnrpc.SignMessageResponse{Signature: sig}, nil
 }
 
-// VerifyMessage verifies a signature over a msg. The signature must be zbase32
-// encoded and signed by an active node in the resident node's channel
-// database. In addition to returning the validity of the signature,
-// VerifyMessage also returns the recovered pubkey from the signature.
-func (r *rpcServer) VerifyMessage(ctx context.Context,
-	in *lnrpc.VerifyMessageRequest) (*lnrpc.VerifyMessageResponse, error) {
-
-	if in.Msg == nil {
-		return nil, fmt.Errorf("need a message to verify")
-	}
-
-	// The signature should be zbase32 encoded
-	sig, err := zbase32.DecodeString(in.Signature)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode signature: %v", err)
-	}
-
-	// The signature is over the double-sha256 hash of the message.
-	in.Msg = append(signedMsgPrefix, in.Msg...)
-	digest := chainhash.DoubleHashB(in.Msg)
-
-	// RecoverCompact both recovers the pubkey and validates the signature.
-	pubKey, _, err := ecdsa.RecoverCompact(sig, digest)
-	if err != nil {
-		return &lnrpc.VerifyMessageResponse{Valid: false}, nil
-	}
-	pubKeyHex := hex.EncodeToString(pubKey.SerializeCompressed())
-
-	var pub [33]byte
-	copy(pub[:], pubKey.SerializeCompressed())
-
-	// Query the channel graph to ensure a node in the network with active
-	// channels signed the message.
-	//
-	// TODO(phlip9): Require valid nodes to have capital in active channels.
-	graph := r.server.graphDB
-	_, active, err := graph.HasLightningNode(pub)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query graph: %v", err)
-	}
-
-	return &lnrpc.VerifyMessageResponse{
-		Valid:  active,
-		Pubkey: pubKeyHex,
-	}, nil
-}
-
-// ConnectPeer attempts to establish a connection to a remote peer.
-func (r *rpcServer) ConnectPeer(ctx context.Context,
-	in *lnrpc.ConnectPeerRequest) (*lnrpc.ConnectPeerResponse, error) {
-
-	// The server hasn't yet started, so it won't be able to service any of
-	// our requests, so we'll bail early here.
-	if !r.server.Started() {
-		return nil, ErrServerNotActive
-	}
-
-	if in.Addr == nil {
-		return nil, fmt.Errorf("need: lnc pubkeyhash@hostname")
-	}
-
-	pubkeyHex, err := hex.DecodeString(in.Addr.Pubkey)
-	if err != nil {
-		return nil, err
-	}
-	pubKey, err := btcec.ParsePubKey(pubkeyHex)
-	if err != nil {
-		return nil, err
-	}
-
-	// Connections to ourselves are disallowed for obvious reasons.
-	if pubKey.IsEqual(r.server.identityECDH.PubKey()) {
-		return nil, fmt.Errorf("cannot make connection to self")
-	}
-
-	addr, err := parseAddr(in.Addr.Host, r.cfg.net)
-	if err != nil {
-		return nil, err
-	}
-
-	peerAddr := &lnwire.NetAddress{
-		IdentityKey: pubKey,
-		Address:     addr,
-		ChainNet:    r.cfg.ActiveNetParams.Net,
-	}
-
-	rpcsLog.Debugf("[connectpeer] requested connection to %x@%s",
-		peerAddr.IdentityKey.SerializeCompressed(), peerAddr.Address)
-
-	// By default, we will use the global connection timeout value.
-	timeout := r.cfg.ConnectionTimeout
-
-	// Check if the connection timeout is set. If set, we will use it in our
-	// request.
-	if in.Timeout != 0 {
-		timeout = time.Duration(in.Timeout) * time.Second
-		rpcsLog.Debugf(
-			"[connectpeer] connection timeout is set to %v",
-			timeout,
-		)
-	}
-
-	if err := r.server.ConnectToPeer(
-		peerAddr, in.Perm, timeout,
-	); err != nil {
-		rpcsLog.Errorf(
-			"[connectpeer]: error connecting to peer: %v", err,
-		)
-		return nil, err
-	}
-
-	rpcsLog.Debugf("Connected to peer: %v", peerAddr.String())
-	return &lnrpc.ConnectPeerResponse{}, nil
-}
-
 // GetInfo returns general information concerning the lightning node including
 // its identity pubkey, alias, the chains it is connected to, and information
 // concerning the number of open+pending channels.
@@ -1611,27 +1457,6 @@ func (r *rpcServer) GetInfo(_ context.Context,
 		Chains:         activeChains,
 		Version:        build.Version() + " commit=" + build.Commit,
 		CommitHash:     build.CommitHash,
-	}, nil
-}
-
-// GetRecoveryInfo returns a boolean indicating whether the wallet is started
-// in recovery mode, whether the recovery is finished, and the progress made
-// so far.
-func (r *rpcServer) GetRecoveryInfo(ctx context.Context,
-	in *lnrpc.GetRecoveryInfoRequest) (*lnrpc.GetRecoveryInfoResponse, error) {
-
-	isRecoveryMode, progress, err := r.server.cc.Wallet.GetRecoveryInfo()
-	if err != nil {
-		return nil, fmt.Errorf("unable to get wallet recovery info: %v", err)
-	}
-
-	rpcsLog.Debugf("[getrecoveryinfo] is recovery mode=%v, progress=%v",
-		isRecoveryMode, progress)
-
-	return &lnrpc.GetRecoveryInfoResponse{
-		RecoveryMode:     isRecoveryMode,
-		RecoveryFinished: progress == 1,
-		Progress:         progress,
 	}, nil
 }
 
