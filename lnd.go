@@ -404,44 +404,6 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 		return mkErr("error notifying ready: %v", err)
 	}
 
-	// We'll wait until we're fully synced to continue the start up of the
-	// remainder of the daemon. This ensures that we don't accept any
-	// possibly invalid state transitions, or accept channels with spent
-	// funds.
-	_, bestHeight, err := activeChainControl.ChainIO.GetBestBlock()
-	if err != nil {
-		return mkErr("unable to determine chain tip: %v", err)
-	}
-
-	ltndLog.Infof("Waiting for chain backend to finish sync, "+
-		"start_height=%v", bestHeight)
-
-	for {
-		if !interceptor.Alive() {
-			return nil
-		}
-
-		synced, _, err := activeChainControl.Wallet.IsSynced()
-		if err != nil {
-			return mkErr("unable to determine if wallet is "+
-				"synced: %v", err)
-		}
-
-		if synced {
-			break
-		}
-
-		time.Sleep(time.Second * 1)
-	}
-
-	_, bestHeight, err = activeChainControl.ChainIO.GetBestBlock()
-	if err != nil {
-		return mkErr("unable to determine chain tip: %v", err)
-	}
-
-	ltndLog.Infof("Chain backend is fully synced (end_height=%v)!",
-		bestHeight)
-
 	// With all the relevant chains initialized, we can finally start the
 	// server itself.
 	if err := server.Start(); err != nil {

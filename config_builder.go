@@ -25,6 +25,11 @@ import (
 	"gopkg.in/macaroon-bakery.v2/bakery"
 )
 
+const (
+	// From github.com/lightningnetwork/lnd/lncfg/db.go
+	macaroonDBName = "macaroons.db"
+)
+
 // GrpcRegistrar is an interface that must be satisfied by an external subserver
 // that wants to be able to register its own gRPC server onto lnd's main
 // grpc.Server instance.
@@ -343,6 +348,12 @@ func (d *DefaultWalletImpl) BuildWalletConfig(ctx context.Context,
 		}
 	}
 
+	err = walletInitParams.Wallet.Unlock(privateWalletPw, nil)
+	if err != nil {
+		d.logger.Error(err)
+		return nil, nil, nil, err
+	}
+
 	var macaroonService *macaroons.Service
 	if !d.cfg.NoMacaroons {
 		// Create the macaroon authentication/authorization service.
@@ -487,15 +498,20 @@ func (d *DefaultWalletImpl) BuildWalletConfig(ctx context.Context,
 	// Let's go ahead and create the partial chain control now that is only
 	// dependent on our configuration and doesn't require any wallet
 	// specific information.
-	partialChainControl, pccCleanup, err := chainreg.NewPartialChainControl(
-		chainControlCfg,
-	)
-	cleanUpTasks = append(cleanUpTasks, pccCleanup)
-	if err != nil {
-		err := fmt.Errorf("unable to create partial chain control: %v",
-			err)
-		d.logger.Error(err)
-		return nil, nil, nil, err
+	backend := &chainreg.NoChainBackend{}
+	source := &chainreg.NoChainSource{
+		BestBlockTime: time.Now(),
+	}
+
+	partialChainControl := &chainreg.PartialChainControl{
+		Cfg:           chainControlCfg,
+		ChainSource:   source,
+		ChainNotifier: backend,
+		ChainView:     backend,
+		FeeEstimator:  backend,
+		HealthCheck: func() error {
+			return nil
+		},
 	}
 
 	walletConfig := &btcwallet.Config{
@@ -531,20 +547,32 @@ func (d *DefaultWalletImpl) BuildChainControl(
 		return nil, nil, err
 	}
 
-	lnWalletConfig := lnwallet.Config{}
-
-	// We've created the wallet configuration now, so we can finish
-	// initializing the main chain control.
-	activeChainControl, cleanUp, err := chainreg.NewChainControl(
-		lnWalletConfig, walletController, partialChainControl,
+	keyRing := keychain.NewBtcWalletKeyRing(
+		walletController.InternalWallet(),
+		walletConfig.CoinType,
 	)
+
+	lnWallet, err := lnwallet.NewLightningWallet(lnwallet.Config{
+		SecretKeyRing:    keyRing,
+		WalletController: walletController,
+	})
 	if err != nil {
-		err := fmt.Errorf("unable to create chain control: %v", err)
 		d.logger.Error(err)
 		return nil, nil, err
 	}
 
-	return activeChainControl, cleanUp, nil
+	// We've created the wallet configuration now, so we can finish
+	// initializing the main chain control.
+	activeChainControl := &chainreg.ChainControl{
+		PartialChainControl: partialChainControl,
+		MsgSigner:           walletController,
+		Signer:              walletController,
+		ChainIO:             walletController,
+		KeyRing:             keyRing,
+		Wallet:              lnWallet,
+	}
+
+	return activeChainControl, func() {}, nil
 }
 
 // DatabaseInstances is a struct that holds all instances to the actual
@@ -596,9 +624,7 @@ func (d *DefaultDatabaseBuilder) BuildDatabase(
 	startOpenTime := time.Now()
 
 	// TODO(aakselrod): fix this
-	databaseBackends, err := cfg.DB.GetBackends(
-		ctx, "", cfg.networkDir, "", false, false,
-	)
+	databaseBackends, err := GetBackends(ctx, cfg.DB, cfg.networkDir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("unable to obtain database "+
 			"backends: %v", err)
@@ -745,4 +771,142 @@ func waitForWalletPassword(cfg *Config,
 	case <-shutdownChan:
 		return nil, fmt.Errorf("shutting down")
 	}
+}
+
+// GetBackends returns a set of kvdb.Backends as set in the DB config.
+// Migrated here from github.com/lightningnetwork/lnd/lncfg/db.go to remove
+// requirement for creating any DBs except wallet and macaroons.
+func GetBackends(ctx context.Context, db *lncfg.DB, walletDBPath string) (
+	*lncfg.DatabaseBackends, error) {
+
+	// We keep track of all the kvdb backends we actually open and return a
+	// reference to their close function so they can be cleaned up properly
+	// on error or shutdown.
+	closeFuncs := make(map[string]func() error)
+
+	// If we need to return early because of an error, we invoke any close
+	// function that has been initialized so far.
+	returnEarly := true
+	defer func() {
+		if !returnEarly {
+			return
+		}
+
+		for _, closeFunc := range closeFuncs {
+			_ = closeFunc()
+		}
+	}()
+
+	switch db.Backend {
+	case lncfg.EtcdBackend:
+		// As long as the graph data, channel state and height hint
+		// cache are all still in the channel.db file in bolt, we
+		// replicate the same behavior here and use the same etcd
+		// backend for those three sub DBs. But we namespace it properly
+		// to make such a split even easier in the future. This will
+		// break lnd for users that ran on etcd with 0.13.x since that
+		// code used the root namespace. We assume that nobody used etcd
+		// for mainnet just yet since that feature was clearly marked as
+		// experimental in 0.13.x.
+		etcdMacaroonBackend, err := kvdb.Open(
+			kvdb.EtcdBackendName, ctx,
+			db.Etcd.CloneWithSubNamespace(lncfg.NSMacaroonDB),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error opening etcd macaroon "+
+				"DB: %v", err)
+		}
+		closeFuncs[lncfg.NSMacaroonDB] = etcdMacaroonBackend.Close
+
+		etcdWalletBackend, err := kvdb.Open(
+			kvdb.EtcdBackendName, ctx,
+			db.Etcd.
+				CloneWithSubNamespace(lncfg.NSWalletDB).
+				CloneWithSingleWriter(),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error opening etcd macaroon "+
+				"DB: %v", err)
+		}
+		closeFuncs[lncfg.NSWalletDB] = etcdWalletBackend.Close
+
+		returnEarly = false
+		return &lncfg.DatabaseBackends{
+			MacaroonDB: etcdMacaroonBackend,
+			// The wallet loader will attempt to use/create the
+			// wallet in the replicated remote DB if we're running
+			// in a clustered environment. This will ensure that all
+			// members of the cluster have access to the same wallet
+			// state.
+			WalletDB: btcwallet.LoaderWithExternalWalletDB(
+				etcdWalletBackend,
+			),
+			Remote:     true,
+			CloseFuncs: closeFuncs,
+		}, nil
+
+	case lncfg.PostgresBackend:
+		postgresMacaroonBackend, err := kvdb.Open(
+			kvdb.PostgresBackendName, ctx,
+			db.Postgres, lncfg.NSMacaroonDB,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error opening postgres "+
+				"macaroon DB: %v", err)
+		}
+		closeFuncs[lncfg.NSMacaroonDB] = postgresMacaroonBackend.Close
+
+		postgresWalletBackend, err := kvdb.Open(
+			kvdb.PostgresBackendName, ctx,
+			db.Postgres, lncfg.NSWalletDB,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error opening postgres macaroon "+
+				"DB: %v", err)
+		}
+		closeFuncs[lncfg.NSWalletDB] = postgresWalletBackend.Close
+
+		returnEarly = false
+		return &lncfg.DatabaseBackends{
+			MacaroonDB: postgresMacaroonBackend,
+			// The wallet loader will attempt to use/create the
+			// wallet in the replicated remote DB if we're running
+			// in a clustered environment. This will ensure that all
+			// members of the cluster have access to the same wallet
+			// state.
+			WalletDB: btcwallet.LoaderWithExternalWalletDB(
+				postgresWalletBackend,
+			),
+			Remote:     true,
+			CloseFuncs: closeFuncs,
+		}, nil
+	}
+
+	// We're using all bbolt based databases by default.
+	macaroonBackend, err := kvdb.GetBoltBackend(&kvdb.BoltBackendConfig{
+		DBPath:            walletDBPath,
+		DBFileName:        macaroonDBName,
+		DBTimeout:         db.Bolt.DBTimeout,
+		NoFreelistSync:    db.Bolt.NoFreelistSync,
+		AutoCompact:       db.Bolt.AutoCompact,
+		AutoCompactMinAge: db.Bolt.AutoCompactMinAge,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error opening macaroon DB: %v", err)
+	}
+	closeFuncs[lncfg.NSMacaroonDB] = macaroonBackend.Close
+
+	returnEarly = false
+	return &lncfg.DatabaseBackends{
+		MacaroonDB: macaroonBackend,
+		// When "running locally", LND will use the bbolt wallet.db to
+		// store the wallet located in the chain data dir, parametrized
+		// by the active network. The wallet loader has its own cleanup
+		// method so we don't need to add anything to our map (in fact
+		// nothing is opened just yet).
+		WalletDB: btcwallet.LoaderWithLocalWalletDB(
+			walletDBPath, db.Bolt.NoFreelistSync, db.Bolt.DBTimeout,
+		),
+		CloseFuncs: closeFuncs,
+	}, nil
 }

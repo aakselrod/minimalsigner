@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/chainreg"
@@ -15,6 +16,7 @@ import (
 	"github.com/lightningnetwork/lnd/netann"
 	"github.com/lightningnetwork/lnd/pool"
 	"github.com/lightningnetwork/lnd/subscribe"
+	"github.com/lightningnetwork/lnd/sweep"
 )
 
 var (
@@ -51,8 +53,8 @@ type server struct {
 
 	cc *chainreg.ChainControl
 
-	// miscDB is the DB that contains all "other" databases within the main
-	// channel DB that haven't been separated out yet.
+	sweeper *sweep.UtxoSweeper
+
 	sigPool *lnwallet.SigPool
 
 	writePool *pool.Write
@@ -118,6 +120,24 @@ func newServer(cfg *Config, dbs *DatabaseInstances, cc *chainreg.ChainControl,
 
 		quit: make(chan struct{}),
 	}
+
+	// TODO(aakselrod): Eliminate need for sweeper as signer doesn't sweep.
+	s.sweeper = sweep.New(&sweep.UtxoSweeperConfig{
+		FeeEstimator:   cc.FeeEstimator,
+		GenSweepScript: newSweepPkScriptGen(cc.Wallet),
+		Signer:         cc.Signer,
+		Wallet:         cc.Wallet,
+		NewBatchTimer: func() <-chan time.Time {
+			return time.NewTimer(sweep.DefaultBatchWindowDuration).C
+		},
+		Notifier:             cc.ChainNotifier,
+		Store:                sweep.NewMockSweeperStore(),
+		MaxInputsPerTx:       sweep.DefaultMaxInputsPerTx,
+		MaxSweepAttempts:     sweep.DefaultMaxSweepAttempts,
+		NextAttemptDeltaFunc: sweep.DefaultNextAttemptDeltaFunc,
+		MaxFeeRate:           sweep.DefaultMaxFeeRate,
+		FeeRateBucketSize:    sweep.DefaultFeeRateBucketSize,
+	})
 
 	// Create liveliness monitor.
 	s.createLivenessMonitor(cfg, cc)
@@ -317,4 +337,24 @@ func (s *server) Stop() error {
 // NOTE: This function is safe for concurrent access.
 func (s *server) Stopped() bool {
 	return atomic.LoadInt32(&s.stopping) != 0
+}
+
+// newSweepPkScriptGen creates closure that generates a new public key script
+// which should be used to sweep any funds into the on-chain wallet.
+// Specifically, the script generated is a version 0, pay-to-witness-pubkey-hash
+// (p2wkh) output.
+func newSweepPkScriptGen(
+	wallet lnwallet.WalletController) func() ([]byte, error) {
+
+	return func() ([]byte, error) {
+		sweepAddr, err := wallet.NewAddress(
+			lnwallet.TaprootPubkey, false,
+			lnwallet.DefaultAccountName,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		return txscript.PayToAddrScript(sweepAddr)
+	}
 }

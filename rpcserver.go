@@ -580,7 +580,7 @@ func (r *rpcServer) addDeps(s *server, macService *macaroons.Service,
 	// TODO(roasbeef): extend sub-sever config to have both (local vs remote) DB
 	err := subServerCgs.PopulateDependencies(
 		r.cfg, s.cc, r.cfg.networkDir, macService, s.nodeSigner,
-		r.cfg.ActiveNetParams.Params, rpcsLog,
+		s.sweeper, r.cfg.ActiveNetParams.Params, rpcsLog,
 	)
 	if err != nil {
 		return err

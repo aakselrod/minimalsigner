@@ -11,6 +11,7 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/macaroons"
 	"github.com/lightningnetwork/lnd/netann"
+	"github.com/lightningnetwork/lnd/sweep"
 )
 
 // subRPCServerConfigs is special sub-config in the main configuration that
@@ -40,8 +41,8 @@ type subRPCServerConfigs struct {
 func (s *subRPCServerConfigs) PopulateDependencies(cfg *Config,
 	cc *chainreg.ChainControl,
 	networkDir string, macService *macaroons.Service,
-	nodeSigner *netann.NodeSigner, activeNetParams *chaincfg.Params,
-	rpcLogger btclog.Logger) error {
+	nodeSigner *netann.NodeSigner, sweeper *sweep.UtxoSweeper,
+	activeNetParams *chaincfg.Params, rpcLogger btclog.Logger) error {
 
 	// First, we'll use reflect to obtain a version of the config struct
 	// that allows us to programmatically inspect its fields.
@@ -103,6 +104,9 @@ func (s *subRPCServerConfigs) PopulateDependencies(cfg *Config,
 			)
 			subCfgValue.FieldByName("KeyRing").Set(
 				reflect.ValueOf(cc.KeyRing),
+			)
+			subCfgValue.FieldByName("Sweeper").Set(
+				reflect.ValueOf(sweeper),
 			)
 			subCfgValue.FieldByName("Chain").Set(
 				reflect.ValueOf(cc.ChainIO),
