@@ -561,6 +561,11 @@ func (d *DefaultWalletImpl) BuildChainControl(
 		return nil, nil, err
 	}
 
+	if err := lnWallet.Startup(); err != nil {
+		d.logger.Error(err)
+		return nil, nil, err
+	}
+
 	// We've created the wallet configuration now, so we can finish
 	// initializing the main chain control.
 	activeChainControl := &chainreg.ChainControl{
