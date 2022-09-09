@@ -9,82 +9,19 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/chainreg"
-	"github.com/lightningnetwork/lnd/funding"
 	"github.com/lightningnetwork/lnd/healthcheck"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/netann"
-	"github.com/lightningnetwork/lnd/peer"
 	"github.com/lightningnetwork/lnd/pool"
 	"github.com/lightningnetwork/lnd/subscribe"
 )
 
-const (
-	// defaultMinPeers is the minimum number of peers nodes should always be
-	// connected to.
-	defaultMinPeers = 3
-
-	// defaultStableConnDuration is a floor under which all reconnection
-	// attempts will apply exponential randomized backoff. Connections
-	// durations exceeding this value will be eligible to have their
-	// backoffs reduced.
-	defaultStableConnDuration = 10 * time.Minute
-
-	// numInstantInitReconnect specifies how many persistent peers we should
-	// always attempt outbound connections to immediately. After this value
-	// is surpassed, the remaining peers will be randomly delayed using
-	// maxInitReconnectDelay.
-	numInstantInitReconnect = 10
-
-	// maxInitReconnectDelay specifies the maximum delay in seconds we will
-	// apply in attempting to reconnect to persistent peers on startup. The
-	// value used or a particular peer will be chosen between 0s and this
-	// value.
-	maxInitReconnectDelay = 30
-
-	// multiAddrConnectionStagger is the number of seconds to wait between
-	// attempting to a peer with each of its advertised addresses.
-	multiAddrConnectionStagger = 10 * time.Second
-)
-
 var (
-	// ErrPeerNotConnected signals that the server has no connection to the
-	// given peer.
-	ErrPeerNotConnected = errors.New("peer is not connected")
-
-	// ErrServerNotActive indicates that the server has started but hasn't
-	// fully finished the startup process.
-	ErrServerNotActive = errors.New("server is still in the process of " +
-		"starting")
-
 	// ErrServerShuttingDown indicates that the server is in the process of
 	// gracefully exiting.
 	ErrServerShuttingDown = errors.New("server is shutting down")
-
-	// MaxFundingAmount is a soft-limit of the maximum channel size
-	// currently accepted within the Lightning Protocol. This is
-	// defined in BOLT-0002, and serves as an initial precautionary limit
-	// while implementations are battle tested in the real world.
-	//
-	// At the moment, this value depends on which chain is active. It is set
-	// to the value under the Bitcoin chain as default.
-	//
-	// TODO(roasbeef): add command line param to modify.
-	MaxFundingAmount = funding.MaxBtcFundingAmount
 )
-
-// errPeerAlreadyConnected is an error returned by the server when we're
-// commanded to connect to a peer, but they're already connected.
-type errPeerAlreadyConnected struct {
-	peer *peer.Brontide
-}
-
-// Error returns the human readable version of this error type.
-//
-// NOTE: Part of the error interface.
-func (e *errPeerAlreadyConnected) Error() string {
-	return fmt.Sprintf("already connected to peer: %v", e.peer)
-}
 
 // server is the main server of the Lightning Network Daemon. The server houses
 // global state pertaining to the wallet, database, and the rpcserver.

@@ -19,22 +19,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/btcsuite/btcd/btcutil"
 	proxy "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
-	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnrpc"
-	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/macaroons"
 	"github.com/lightningnetwork/lnd/monitoring"
 	"github.com/lightningnetwork/lnd/rpcperms"
 	"github.com/lightningnetwork/lnd/signal"
-	"github.com/lightningnetwork/lnd/tor"
 	"github.com/lightningnetwork/lnd/walletunlocker"
-	"github.com/lightningnetwork/lnd/watchtower"
 	"golang.org/x/crypto/acme/autocert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -160,16 +155,16 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 
 	var network string
 	switch {
-	case cfg.Bitcoin.TestNet3 || cfg.Litecoin.TestNet3:
+	case cfg.Bitcoin.TestNet3:
 		network = "testnet"
 
-	case cfg.Bitcoin.MainNet || cfg.Litecoin.MainNet:
+	case cfg.Bitcoin.MainNet:
 		network = "mainnet"
 
-	case cfg.Bitcoin.SimNet || cfg.Litecoin.SimNet:
+	case cfg.Bitcoin.SimNet:
 		network = "simnet"
 
-	case cfg.Bitcoin.RegTest || cfg.Litecoin.RegTest:
+	case cfg.Bitcoin.RegTest:
 		network = "regtest"
 
 	case cfg.Bitcoin.SigNet:
@@ -206,13 +201,6 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	// Run configuration dependent DB pre-initialization. Note that this
-	// needs to be done early and once during the startup process, before
-	// any DB access.
-	if err := cfg.DB.Init(ctx, cfg.graphDatabaseDir()); err != nil {
-		return mkErr("error initializing DBs: %v", err)
-	}
 
 	// Only process macaroons if --no-macaroons isn't set.
 	serverOpts, restDialOpts, restListen, cleanUp, err := getTLSConfig(cfg)
@@ -351,11 +339,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 	}
 
 	dbs, cleanUp, err := implCfg.DatabaseBuilder.BuildDatabase(ctx)
-	switch {
-	case err == channeldb.ErrDryRunMigrationOK:
-		ltndLog.Infof("%v, exiting", err)
-		return nil
-	case err != nil:
+	if err != nil {
 		return mkErr("unable to open databases: %v", err)
 	}
 
@@ -394,104 +378,6 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 	)
 	if err != nil {
 		return mkErr("error deriving node key: %v", err)
-	}
-
-	if cfg.Tor.StreamIsolation && cfg.Tor.SkipProxyForClearNetTargets {
-		return errStreamIsolationWithProxySkip
-	}
-
-	if cfg.Tor.Active {
-		if cfg.Tor.SkipProxyForClearNetTargets {
-			srvrLog.Info("Onion services are accessible via Tor! " +
-				"NOTE: Traffic to clearnet services is not " +
-				"routed via Tor.")
-		} else {
-			srvrLog.Infof("Proxying all network traffic via Tor "+
-				"(stream_isolation=%v)! NOTE: Ensure the "+
-				"backend node is proxying over Tor as well",
-				cfg.Tor.StreamIsolation)
-		}
-	}
-
-	// If tor is active and either v2 or v3 onion services have been
-	// specified, make a tor controller and pass it into both the watchtower
-	// server and the regular lnd server.
-	var torController *tor.Controller
-	if cfg.Tor.Active && (cfg.Tor.V2 || cfg.Tor.V3) {
-		torController = tor.NewController(
-			cfg.Tor.Control, cfg.Tor.TargetIPAddress,
-			cfg.Tor.Password,
-		)
-
-		// Start the tor controller before giving it to any other
-		// subsystems.
-		if err := torController.Start(); err != nil {
-			return mkErr("unable to initialize tor controller: %v",
-				err)
-		}
-		defer func() {
-			if err := torController.Stop(); err != nil {
-				ltndLog.Errorf("error stopping tor "+
-					"controller: %v", err)
-			}
-		}()
-	}
-
-	var tower *watchtower.Standalone
-	if cfg.Watchtower.Active {
-		towerKeyDesc, err := activeChainControl.KeyRing.DeriveKey(
-			keychain.KeyLocator{
-				Family: keychain.KeyFamilyTowerID,
-				Index:  0,
-			},
-		)
-		if err != nil {
-			return mkErr("error deriving tower key: %v", err)
-		}
-
-		wtCfg := &watchtower.Config{
-			BlockFetcher:   activeChainControl.ChainIO,
-			DB:             dbs.TowerServerDB,
-			EpochRegistrar: activeChainControl.ChainNotifier,
-			Net:            cfg.net,
-			NewAddress: func() (btcutil.Address, error) {
-				return activeChainControl.Wallet.NewAddress(
-					lnwallet.TaprootPubkey, false,
-					lnwallet.DefaultAccountName,
-				)
-			},
-			NodeKeyECDH: keychain.NewPubKeyECDH(
-				towerKeyDesc, activeChainControl.KeyRing,
-			),
-			PublishTx: activeChainControl.Wallet.PublishTransaction,
-			ChainHash: *cfg.ActiveNetParams.GenesisHash,
-		}
-
-		// If there is a tor controller (user wants auto hidden
-		// services), then store a pointer in the watchtower config.
-		if torController != nil {
-			wtCfg.TorController = torController
-			wtCfg.WatchtowerKeyPath = cfg.Tor.WatchtowerKeyPath
-
-			switch {
-			case cfg.Tor.V2:
-				wtCfg.Type = tor.V2
-			case cfg.Tor.V3:
-				wtCfg.Type = tor.V3
-			}
-		}
-
-		wtConfig, err := cfg.Watchtower.Apply(
-			wtCfg, lncfg.NormalizeAddresses,
-		)
-		if err != nil {
-			return mkErr("unable to configure watchtower: %v", err)
-		}
-
-		tower, err = watchtower.New(wtConfig)
-		if err != nil {
-			return mkErr("unable to create watchtower: %v", err)
-		}
 	}
 
 	// Set up the core server which will listen for incoming peer
@@ -565,16 +451,6 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 
 	// We transition the server state to Active, as the server is up.
 	interceptorChain.SetServerActive()
-
-	// Now that the server has started, if the autopilot mode is currently
-	// active, then we'll start the autopilot agent immediately. It will be
-	// stopped together with the autopilot service.
-	if cfg.Watchtower.Active {
-		if err := tower.Start(); err != nil {
-			return mkErr("unable to start watchtower: %v", err)
-		}
-		defer tower.Stop()
-	}
 
 	// Wait for shutdown signal from either a graceful server stop or from
 	// the interrupt handler.
@@ -783,21 +659,7 @@ func bakeMacaroon(ctx context.Context, svc *macaroons.Service,
 // invoice access and one read-only. These can also be used to generate more
 // granular macaroons.
 func genMacaroons(ctx context.Context, svc *macaroons.Service,
-	admFile, roFile, invoiceFile string) error {
-
-	// First, we'll generate a macaroon that only allows the caller to
-	// access invoice related calls. This is useful for merchants and other
-	// services to allow an isolated instance that can only query and
-	// modify invoices.
-	invoiceMacBytes, err := bakeMacaroon(ctx, svc, invoicePermissions)
-	if err != nil {
-		return err
-	}
-	err = ioutil.WriteFile(invoiceFile, invoiceMacBytes, 0644)
-	if err != nil {
-		_ = os.Remove(invoiceFile)
-		return err
-	}
+	admFile, roFile string) error {
 
 	// Generate the read-only macaroon and write it to a file.
 	roBytes, err := bakeMacaroon(ctx, svc, readPermissions)
@@ -840,12 +702,11 @@ func createWalletUnlockerService(cfg *Config) *walletunlocker.UnlockerService {
 	// deleted and recreated in case the root macaroon key is also changed
 	// during the change password operation.
 	macaroonFiles := []string{
-		cfg.AdminMacPath, cfg.ReadMacPath, cfg.InvoiceMacPath,
+		cfg.AdminMacPath, cfg.ReadMacPath,
 	}
 
 	return walletunlocker.New(
-		cfg.ActiveNetParams.Params, macaroonFiles,
-		cfg.ResetWalletTransactions, nil,
+		cfg.ActiveNetParams.Params, macaroonFiles, false, nil,
 	)
 }
 
