@@ -30,7 +30,6 @@ import (
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/chanacceptor"
-	"github.com/lightningnetwork/lnd/chanbackup"
 	"github.com/lightningnetwork/lnd/chanfitness"
 	"github.com/lightningnetwork/lnd/channeldb"
 	"github.com/lightningnetwork/lnd/channelnotifier"
@@ -51,7 +50,6 @@ import (
 	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwallet/chainfee"
-	"github.com/lightningnetwork/lnd/lnwallet/rpcwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"github.com/lightningnetwork/lnd/nat"
 	"github.com/lightningnetwork/lnd/netann"
@@ -160,161 +158,17 @@ type server struct {
 	// identityKeyLoc is the key locator for the above wrapped identity key.
 	identityKeyLoc keychain.KeyLocator
 
-	// nodeSigner is an implementation of the MessageSigner implementation
-	// that's backed by the identity private key of the running lnd node.
-	nodeSigner *netann.NodeSigner
-
-	chanStatusMgr *netann.ChanStatusManager
-
-	// listenAddrs is the list of addresses the server is currently
-	// listening on.
-	listenAddrs []net.Addr
-
-	// torController is a client that will communicate with a locally
-	// running Tor server. This client will handle initiating and
-	// authenticating the connection to the Tor server, automatically
-	// creating and setting up onion services, etc.
-	torController *tor.Controller
-
-	// natTraversal is the specific NAT traversal technique used to
-	// automatically set up port forwarding rules in order to advertise to
-	// the network that the node is accepting inbound connections.
-	natTraversal nat.Traversal
-
-	// lastDetectedIP is the last IP detected by the NAT traversal technique
-	// above. This IP will be watched periodically in a goroutine in order
-	// to handle dynamic IP changes.
-	lastDetectedIP net.IP
-
-	mu         sync.RWMutex
-	peersByPub map[string]*peer.Brontide
-
-	inboundPeers  map[string]*peer.Brontide
-	outboundPeers map[string]*peer.Brontide
-
-	peerConnectedListeners    map[string][]chan<- lnpeer.Peer
-	peerDisconnectedListeners map[string][]chan<- struct{}
-
-	// TODO(yy): the Brontide.Start doesn't know this value, which means it
-	// will continue to send messages even if there are no active channels
-	// and the value below is false. Once it's pruned, all its connections
-	// will be closed, thus the Brontide.Start will return an error.
-	persistentPeers        map[string]bool
-	persistentPeersBackoff map[string]time.Duration
-	persistentPeerAddrs    map[string][]*lnwire.NetAddress
-	persistentConnReqs     map[string][]*connmgr.ConnReq
-	persistentRetryCancels map[string]chan struct{}
-
-	// peerErrors keeps a set of peer error buffers for peers that have
-	// disconnected from us. This allows us to track historic peer errors
-	// over connections. The string of the peer's compressed pubkey is used
-	// as a key for this map.
-	peerErrors map[string]*queue.CircularBuffer
-
-	// ignorePeerTermination tracks peers for which the server has initiated
-	// a disconnect. Adding a peer to this map causes the peer termination
-	// watcher to short circuit in the event that peers are purposefully
-	// disconnected.
-	ignorePeerTermination map[*peer.Brontide]struct{}
-
-	// scheduledPeerConnection maps a pubkey string to a callback that
-	// should be executed in the peerTerminationWatcher the prior peer with
-	// the same pubkey exits.  This allows the server to wait until the
-	// prior peer has cleaned up successfully, before adding the new peer
-	// intended to replace it.
-	scheduledPeerConnection map[string]func()
-
-	// pongBuf is a shared pong reply buffer we'll use across all active
-	// peer goroutines. We know the max size of a pong message
-	// (lnwire.MaxPongBytes), so we can allocate this ahead of time, and
-	// avoid allocations each time we need to send a pong message.
-	pongBuf []byte
+	mu sync.RWMutex
 
 	cc *chainreg.ChainControl
 
-	fundingMgr *funding.Manager
-
-	graphDB *channeldb.ChannelGraph
-
-	chanStateDB *channeldb.ChannelStateDB
-
-	addrSource chanbackup.AddressSource
-
 	// miscDB is the DB that contains all "other" databases within the main
 	// channel DB that haven't been separated out yet.
-	miscDB *channeldb.DB
-
-	aliasMgr *aliasmgr.Manager
-
-	htlcSwitch *htlcswitch.Switch
-
-	interceptableSwitch *htlcswitch.InterceptableSwitch
-
-	invoices *invoices.InvoiceRegistry
-
-	channelNotifier *channelnotifier.ChannelNotifier
-
-	peerNotifier *peernotifier.PeerNotifier
-
-	htlcNotifier *htlcswitch.HtlcNotifier
-
-	witnessBeacon contractcourt.WitnessBeacon
-
-	breachArbiter *contractcourt.BreachArbiter
-
-	missionControl *routing.MissionControl
-
-	chanRouter *routing.ChannelRouter
-
-	controlTower routing.ControlTower
-
-	authGossiper *discovery.AuthenticatedGossiper
-
-	localChanMgr *localchans.Manager
-
-	utxoNursery *contractcourt.UtxoNursery
-
-	sweeper *sweep.UtxoSweeper
-
-	chainArb *contractcourt.ChainArbitrator
-
-	sphinx *hop.OnionProcessor
-
-	towerClient wtclient.Client
-
-	anchorTowerClient wtclient.Client
-
-	connMgr *connmgr.ConnManager
-
 	sigPool *lnwallet.SigPool
 
 	writePool *pool.Write
 
 	readPool *pool.Read
-
-	// featureMgr dispatches feature vectors for various contexts within the
-	// daemon.
-	featureMgr *feature.Manager
-
-	// currentNodeAnn is the node announcement that has been broadcast to
-	// the network upon startup, if the attributes of the node (us) has
-	// changed since last start.
-	currentNodeAnn *lnwire.NodeAnnouncement
-
-	// chansToRestore is the set of channels that upon starting, the server
-	// should attempt to restore/recover.
-	chansToRestore walletunlocker.ChannelsToRecover
-
-	// chanSubSwapper is a sub-system that will ensure our on-disk channel
-	// backups are consistent at all times. It interacts with the
-	// channelNotifier to be notified of newly opened and closed channels.
-	chanSubSwapper *chanbackup.SubSwapper
-
-	// chanEventStore tracks the behaviour of channels and their remote peers to
-	// provide insights into their health and performance.
-	chanEventStore *chanfitness.ChannelEventStore
-
-	hostAnn *netann.HostAnnouncer
 
 	// livelinessMonitor monitors that lnd has access to critical resources.
 	livelinessMonitor *healthcheck.Monitor
@@ -1515,23 +1369,6 @@ func (s *server) signAliasUpdate(u *lnwire.ChannelUpdate) (*ecdsa.Signature,
 // If a health check has been disabled by setting attempts to 0, our monitor
 // will not run it.
 func (s *server) createLivenessMonitor(cfg *Config, cc *chainreg.ChainControl) {
-	chainBackendAttempts := cfg.HealthChecks.ChainCheck.Attempts
-	if cfg.Bitcoin.Node == "nochainbackend" {
-		srvrLog.Info("Disabling chain backend checks for " +
-			"nochainbackend mode")
-
-		chainBackendAttempts = 0
-	}
-
-	chainHealthCheck := healthcheck.NewObservation(
-		"chain backend",
-		cc.HealthCheck,
-		cfg.HealthChecks.ChainCheck.Interval,
-		cfg.HealthChecks.ChainCheck.Timeout,
-		cfg.HealthChecks.ChainCheck.Backoff,
-		chainBackendAttempts,
-	)
-
 	diskCheck := healthcheck.NewObservation(
 		"disk space",
 		func() error {
@@ -1586,51 +1423,7 @@ func (s *server) createLivenessMonitor(cfg *Config, cc *chainreg.ChainControl) {
 	)
 
 	checks := []*healthcheck.Observation{
-		chainHealthCheck, diskCheck, tlsHealthCheck,
-	}
-
-	// If Tor is enabled, add the healthcheck for tor connection.
-	if s.torController != nil {
-		torConnectionCheck := healthcheck.NewObservation(
-			"tor connection",
-			func() error {
-				return healthcheck.CheckTorServiceStatus(
-					s.torController,
-					s.createNewHiddenService,
-				)
-			},
-			cfg.HealthChecks.TorConnection.Interval,
-			cfg.HealthChecks.TorConnection.Timeout,
-			cfg.HealthChecks.TorConnection.Backoff,
-			cfg.HealthChecks.TorConnection.Attempts,
-		)
-		checks = append(checks, torConnectionCheck)
-	}
-
-	// If remote signing is enabled, add the healthcheck for the remote
-	// signing RPC interface.
-	if s.cfg.RemoteSigner != nil && s.cfg.RemoteSigner.Enable {
-		// Because we have two cascading timeouts here, we need to add
-		// some slack to the "outer" one of them in case the "inner"
-		// returns exactly on time.
-		overhead := time.Millisecond * 10
-
-		remoteSignerConnectionCheck := healthcheck.NewObservation(
-			"remote signer connection",
-			rpcwallet.HealthCheck(
-				s.cfg.RemoteSigner,
-
-				// For the health check we might to be even
-				// stricter than the initial/normal connect, so
-				// we use the health check timeout here.
-				cfg.HealthChecks.RemoteSigner.Timeout,
-			),
-			cfg.HealthChecks.RemoteSigner.Interval,
-			cfg.HealthChecks.RemoteSigner.Timeout+overhead,
-			cfg.HealthChecks.RemoteSigner.Backoff,
-			cfg.HealthChecks.RemoteSigner.Attempts,
-		)
-		checks = append(checks, remoteSignerConnectionCheck)
+		diskCheck, tlsHealthCheck,
 	}
 
 	// If we have not disabled all of our health checks, we create a

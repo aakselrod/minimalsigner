@@ -2,7 +2,6 @@ package minimalsigner
 
 import (
 	"github.com/btcsuite/btclog"
-	"github.com/lightningnetwork/lnd/autopilot"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/healthcheck"
@@ -12,7 +11,6 @@ import (
 	"github.com/lightningnetwork/lnd/lnwallet/btcwallet"
 	"github.com/lightningnetwork/lnd/rpcperms"
 	"github.com/lightningnetwork/lnd/signal"
-	"github.com/lightningnetwork/lnd/tor"
 )
 
 // replaceableLogger is a thin wrapper around a logger that is used so the
@@ -91,7 +89,6 @@ func SetupLoggers(root *build.RotatingLogWriter, interceptor signal.Interceptor)
 	// Some of the loggers declared in the main lnd package are also used
 	// in sub packages.
 	signal.UseLogger(ltndLog)
-	autopilot.UseLogger(atplLog)
 
 	AddSubLogger(root, "LNWL", interceptor, lnwallet.UseLogger)
 	AddSubLogger(root, "SGNR", interceptor, signrpc.UseLogger)
@@ -100,7 +97,6 @@ func SetupLoggers(root *build.RotatingLogWriter, interceptor signal.Interceptor)
 	AddSubLogger(root, healthcheck.Subsystem, interceptor, healthcheck.UseLogger)
 	AddSubLogger(root, chainreg.Subsystem, interceptor, chainreg.UseLogger)
 	AddSubLogger(root, rpcperms.Subsystem, interceptor, rpcperms.UseLogger)
-	AddSubLogger(root, tor.Subsystem, interceptor, tor.UseLogger)
 	AddSubLogger(root, btcwallet.Subsystem, interceptor, btcwallet.UseLogger)
 }
 
