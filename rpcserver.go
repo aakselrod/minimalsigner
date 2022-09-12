@@ -8,11 +8,10 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/btcsuite/btcd/btcutil"
 	"github.com/lightningnetwork/lnd/build"
+	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnrpc"
-	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/macaroons"
 	"github.com/lightningnetwork/lnd/rpcperms"
 	"github.com/lightningnetwork/lnd/signal"
@@ -28,35 +27,11 @@ var (
 	// permissions for authorization purposes, all lowercase.
 	readPermissions = []bakery.Op{
 		{
-			Entity: "onchain",
-			Action: "read",
-		},
-		{
-			Entity: "offchain",
-			Action: "read",
-		},
-		{
 			Entity: "address",
 			Action: "read",
 		},
 		{
-			Entity: "message",
-			Action: "read",
-		},
-		{
-			Entity: "peers",
-			Action: "read",
-		},
-		{
 			Entity: "info",
-			Action: "read",
-		},
-		{
-			Entity: "invoices",
-			Action: "read",
-		},
-		{
-			Entity: "signer",
 			Action: "read",
 		},
 		{
@@ -73,27 +48,11 @@ var (
 			Action: "write",
 		},
 		{
-			Entity: "offchain",
-			Action: "write",
-		},
-		{
-			Entity: "address",
-			Action: "write",
-		},
-		{
 			Entity: "message",
 			Action: "write",
 		},
 		{
-			Entity: "peers",
-			Action: "write",
-		},
-		{
 			Entity: "info",
-			Action: "write",
-		},
-		{
-			Entity: "invoices",
 			Action: "write",
 		},
 		{
@@ -110,40 +69,14 @@ var (
 		},
 	}
 
-	// invoicePermissions is a slice of all the entities that allows a user
-	// to only access calls that are related to invoices, so: streaming
-	// RPCs, generating, and listening invoices.
-	invoicePermissions = []bakery.Op{
-		{
-			Entity: "invoices",
-			Action: "read",
-		},
-		{
-			Entity: "invoices",
-			Action: "write",
-		},
-		{
-			Entity: "address",
-			Action: "read",
-		},
-		{
-			Entity: "address",
-			Action: "write",
-		},
-		{
-			Entity: "onchain",
-			Action: "read",
-		},
-	}
-
 	// TODO(guggero): Refactor into constants that are used for all
 	// permissions in this file. Also expose the list of possible
 	// permissions in an RPC when per RPC permissions are
 	// implemented.
 	validActions  = []string{"read", "write", "generate"}
 	validEntities = []string{
-		"onchain", "offchain", "address", "message",
-		"peers", "info", "invoices", "signer", "macaroon",
+		"onchain", "address", "message",
+		"info", "signer", "macaroon",
 		macaroons.PermissionEntityCustomURI,
 	}
 
@@ -203,171 +136,11 @@ func GetAllPermissions() []bakery.Op {
 // the permissions they require.
 func MainRPCServerPermissions() map[string][]bakery.Op {
 	return map[string][]bakery.Op{
-		"/lnrpc.Lightning/SendCoins": {{
-			Entity: "onchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/ListUnspent": {{
-			Entity: "onchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/SendMany": {{
-			Entity: "onchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/NewAddress": {{
-			Entity: "address",
-			Action: "write",
-		}},
 		"/lnrpc.Lightning/SignMessage": {{
 			Entity: "message",
 			Action: "write",
 		}},
-		"/lnrpc.Lightning/VerifyMessage": {{
-			Entity: "message",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/ConnectPeer": {{
-			Entity: "peers",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/DisconnectPeer": {{
-			Entity: "peers",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/OpenChannel": {{
-			Entity: "onchain",
-			Action: "write",
-		}, {
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/BatchOpenChannel": {{
-			Entity: "onchain",
-			Action: "write",
-		}, {
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/OpenChannelSync": {{
-			Entity: "onchain",
-			Action: "write",
-		}, {
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/CloseChannel": {{
-			Entity: "onchain",
-			Action: "write",
-		}, {
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/AbandonChannel": {{
-			Entity: "offchain",
-			Action: "write",
-		}},
 		"/lnrpc.Lightning/GetInfo": {{
-			Entity: "info",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/GetRecoveryInfo": {{
-			Entity: "info",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/ListPeers": {{
-			Entity: "peers",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/WalletBalance": {{
-			Entity: "onchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/EstimateFee": {{
-			Entity: "onchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/ChannelBalance": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/PendingChannels": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/ListChannels": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/SubscribeChannelEvents": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/ClosedChannels": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/SendPayment": {{
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/SendPaymentSync": {{
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/SendToRoute": {{
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/SendToRouteSync": {{
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/AddInvoice": {{
-			Entity: "invoices",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/LookupInvoice": {{
-			Entity: "invoices",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/ListInvoices": {{
-			Entity: "invoices",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/SubscribeInvoices": {{
-			Entity: "invoices",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/SubscribeTransactions": {{
-			Entity: "onchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/GetTransactions": {{
-			Entity: "onchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/DescribeGraph": {{
-			Entity: "info",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/GetNodeMetrics": {{
-			Entity: "info",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/GetChanInfo": {{
-			Entity: "info",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/GetNodeInfo": {{
-			Entity: "info",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/QueryRoutes": {{
-			Entity: "info",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/GetNetworkInfo": {{
 			Entity: "info",
 			Action: "read",
 		}},
@@ -375,67 +148,8 @@ func MainRPCServerPermissions() map[string][]bakery.Op {
 			Entity: "info",
 			Action: "write",
 		}},
-		"/lnrpc.Lightning/SubscribeChannelGraph": {{
-			Entity: "info",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/ListPayments": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/DeletePayment": {{
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/DeleteAllPayments": {{
-			Entity: "offchain",
-			Action: "write",
-		}},
 		"/lnrpc.Lightning/DebugLevel": {{
 			Entity: "info",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/DecodePayReq": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/FeeReport": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/UpdateChannelPolicy": {{
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/ForwardingHistory": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/RestoreChannelBackups": {{
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/ExportChannelBackup": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/VerifyChanBackup": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/ExportAllChannelBackups": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/SubscribeChannelBackups": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/ChannelAcceptor": {{
-			Entity: "onchain",
-			Action: "write",
-		}, {
-			Entity: "offchain",
 			Action: "write",
 		}},
 		"/lnrpc.Lightning/BakeMacaroon": {{
@@ -458,32 +172,9 @@ func MainRPCServerPermissions() map[string][]bakery.Op {
 			Entity: "macaroon",
 			Action: "read",
 		}},
-		"/lnrpc.Lightning/SubscribePeerEvents": {{
-			Entity: "peers",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/FundingStateStep": {{
-			Entity: "onchain",
-			Action: "write",
-		}, {
-			Entity: "offchain",
-			Action: "write",
-		}},
 		lnrpc.RegisterRPCMiddlewareURI: {{
 			Entity: "macaroon",
 			Action: "write",
-		}},
-		"/lnrpc.Lightning/SendCustomMessage": {{
-			Entity: "offchain",
-			Action: "write",
-		}},
-		"/lnrpc.Lightning/SubscribeCustomMessages": {{
-			Entity: "offchain",
-			Action: "read",
-		}},
-		"/lnrpc.Lightning/ListAliases": {{
-			Entity: "offchain",
-			Action: "read",
 		}},
 	}
 }
@@ -731,80 +422,6 @@ func (r *rpcServer) Stop() error {
 	return nil
 }
 
-// NewAddress creates a new address under control of the local wallet.
-func (r *rpcServer) NewAddress(ctx context.Context,
-	in *lnrpc.NewAddressRequest) (*lnrpc.NewAddressResponse, error) {
-
-	// Always use the default wallet account unless one was specified.
-	account := lnwallet.DefaultAccountName
-	if in.Account != "" {
-		account = in.Account
-	}
-
-	// Translate the gRPC proto address type to the wallet controller's
-	// available address types.
-	var (
-		addr btcutil.Address
-		err  error
-	)
-	switch in.Type {
-	case lnrpc.AddressType_WITNESS_PUBKEY_HASH:
-		addr, err = r.server.cc.Wallet.NewAddress(
-			lnwallet.WitnessPubKey, false, account,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-	case lnrpc.AddressType_NESTED_PUBKEY_HASH:
-		addr, err = r.server.cc.Wallet.NewAddress(
-			lnwallet.NestedWitnessPubKey, false, account,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-	case lnrpc.AddressType_TAPROOT_PUBKEY:
-		addr, err = r.server.cc.Wallet.NewAddress(
-			lnwallet.TaprootPubkey, false, account,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-	case lnrpc.AddressType_UNUSED_WITNESS_PUBKEY_HASH:
-		addr, err = r.server.cc.Wallet.LastUnusedAddress(
-			lnwallet.WitnessPubKey, account,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-	case lnrpc.AddressType_UNUSED_NESTED_PUBKEY_HASH:
-		addr, err = r.server.cc.Wallet.LastUnusedAddress(
-			lnwallet.NestedWitnessPubKey, account,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-	case lnrpc.AddressType_UNUSED_TAPROOT_PUBKEY:
-		addr, err = r.server.cc.Wallet.LastUnusedAddress(
-			lnwallet.TaprootPubkey, account,
-		)
-		if err != nil {
-			return nil, err
-		}
-
-	default:
-		return nil, fmt.Errorf("unknown address type: %v", in.Type)
-	}
-
-	rpcsLog.Debugf("[newaddress] account=%v type=%v addr=%v", account,
-		in.Type, addr.String())
-	return &lnrpc.NewAddressResponse{Address: addr.String()}, nil
-}
-
 var (
 	// signedMsgPrefix is a special prefix that we'll prepend to any
 	// messages we sign/verify. We do this to ensure that we don't
@@ -846,15 +463,12 @@ func (r *rpcServer) GetInfo(_ context.Context,
 	encodedIDPub := hex.EncodeToString(idPub)
 
 	network := lncfg.NormalizeNetwork(r.cfg.ActiveNetParams.Name)
-	activeChains := make([]*lnrpc.Chain, r.cfg.registeredChains.NumActiveChains())
-	for i, chain := range r.cfg.registeredChains.ActiveChains() {
-		activeChains[i] = &lnrpc.Chain{
-			Chain:   chain.String(),
-			Network: network,
-		}
+	activeChains := make([]*lnrpc.Chain, 1)
+	activeChains[0] = &lnrpc.Chain{
+		Chain:   chainreg.BitcoinChain.String(),
+		Network: network,
 	}
 
-	// TODO(roasbeef): add synced height n stuff
 	return &lnrpc.GetInfoResponse{
 		IdentityPubkey: encodedIDPub,
 		Chains:         activeChains,

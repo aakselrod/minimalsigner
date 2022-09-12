@@ -458,8 +458,9 @@ func (d *DefaultWalletImpl) BuildWalletConfig(ctx context.Context,
 	// hints and also the wallet itself, for these two we want them to be
 	// replicated, so we'll pass in the remote channel DB instance.
 	chainControlCfg := &chainreg.Config{
-		Bitcoin:            d.cfg.Bitcoin,
-		PrimaryChain:       d.cfg.registeredChains.PrimaryChain,
+		PrimaryChain: func() chainreg.ChainCode {
+			return chainreg.BitcoinChain
+		},
 		ActiveNetParams:    d.cfg.ActiveNetParams,
 		WalletUnlockParams: &walletInitParams,
 	}

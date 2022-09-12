@@ -14,7 +14,6 @@ import (
 	_ "net/http/pprof" // nolint:gosec // used to set up profiling HTTP handlers.
 	"os"
 	"runtime/pprof"
-	"strings"
 	"sync"
 	"time"
 
@@ -148,24 +147,24 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 
 	var network string
 	switch {
-	case cfg.Bitcoin.TestNet3:
+	case cfg.TestNet3:
 		network = "testnet"
 
-	case cfg.Bitcoin.MainNet:
+	case cfg.MainNet:
 		network = "mainnet"
 
-	case cfg.Bitcoin.SimNet:
+	case cfg.SimNet:
 		network = "simnet"
 
-	case cfg.Bitcoin.RegTest:
+	case cfg.RegTest:
 		network = "regtest"
 
-	case cfg.Bitcoin.SigNet:
+	case cfg.SigNet:
 		network = "signet"
 	}
 
 	ltndLog.Infof("Active chain: %v (network=%v)",
-		strings.Title(cfg.registeredChains.PrimaryChain().String()),
+		"bitcoin",
 		network,
 	)
 
@@ -343,12 +342,6 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 	}
 
 	defer cleanUp()
-
-	// Finally before we start the server, we'll register the "holy
-	// trinity" of interface for our current "home chain" with the active
-	// chainRegistry interface.
-	primaryChain := cfg.registeredChains.PrimaryChain()
-	cfg.registeredChains.RegisterChain(primaryChain, activeChainControl)
 
 	// TODO(roasbeef): add rotation
 	idKeyDesc, err := activeChainControl.KeyRing.DeriveKey(
@@ -567,9 +560,8 @@ func bakeMacaroon(ctx context.Context, svc *macaroons.Service,
 	return mac.M().MarshalBinary()
 }
 
-// genMacaroons generates three macaroon files; one admin-level, one for
-// invoice access and one read-only. These can also be used to generate more
-// granular macaroons.
+// genMacaroons generates two macaroon files; one admin-level and one
+// read-only. These can also be used to generate more granular macaroons.
 func genMacaroons(ctx context.Context, svc *macaroons.Service,
 	admFile, roFile string) error {
 

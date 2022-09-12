@@ -137,7 +137,13 @@ type Config struct {
 
 	Profile string `long:"profile" description:"Enable HTTP profiling on either a port or host:port"`
 
-	Bitcoin *lncfg.Chain `group:"Bitcoin" namespace:"bitcoin"`
+	MainNet         bool     `long:"mainnet" description:"Use the main network"`
+	TestNet3        bool     `long:"testnet" description:"Use the test network"`
+	SimNet          bool     `long:"simnet" description:"Use the simulation test network"`
+	RegTest         bool     `long:"regtest" description:"Use the regression test network"`
+	SigNet          bool     `long:"signet" description:"Use the signet test network"`
+	SigNetChallenge string   `long:"signetchallenge" description:"Connect to a custom signet network defined by this challenge instead of using the global default signet test network -- Can be specified multiple times"`
+	SigNetSeedNode  []string `long:"signetseednode" description:"Specify a seed node for the signet network instead of using the global default signet network seed nodes"`
 
 	SubRPCServers *subRPCServerConfigs `group:"subrpc"`
 
@@ -161,10 +167,6 @@ type Config struct {
 	// LogWriter is the root logger that all of the daemon's subloggers are
 	// hooked up to.
 	LogWriter *build.RotatingLogWriter
-
-	// registeredChains keeps track of all chains that have been registered
-	// with the daemon.
-	registeredChains *chainreg.ChainRegistry
 
 	// networkDir is the path to the directory of the currently active
 	// network. This path will hold the files related to each different
@@ -190,7 +192,6 @@ func DefaultConfig() Config {
 		LogDir:            defaultLogDir,
 		MaxLogFiles:       defaultMaxLogFiles,
 		MaxLogFileSize:    defaultMaxLogFileSize,
-		Bitcoin:           &lncfg.Chain{},
 		SubRPCServers: &subRPCServerConfigs{
 			SignRPC: &signrpc.Config{},
 		},
@@ -217,12 +218,11 @@ func DefaultConfig() Config {
 				Backoff:  defaultTLSBackoff,
 			},
 		},
-		LogWriter:        build.NewRotatingLogWriter(),
-		DB:               lncfg.DefaultDB(),
-		Cluster:          lncfg.DefaultCluster(),
-		RPCMiddleware:    lncfg.DefaultRPCMiddleware(),
-		registeredChains: chainreg.NewChainRegistry(),
-		ActiveNetParams:  chainreg.BitcoinTestNetParams,
+		LogWriter:       build.NewRotatingLogWriter(),
+		DB:              lncfg.DefaultDB(),
+		Cluster:         lncfg.DefaultCluster(),
+		RPCMiddleware:   lncfg.DefaultRPCMiddleware(),
+		ActiveNetParams: chainreg.BitcoinRegTestNetParams,
 	}
 }
 
@@ -449,23 +449,23 @@ func ValidateConfig(cfg Config, interceptor signal.Interceptor, fileParser,
 	// number of network flags passed; assign active network params
 	// while we're at it.
 	numNets := 0
-	if cfg.Bitcoin.MainNet {
+	if cfg.MainNet {
 		numNets++
 		cfg.ActiveNetParams = chainreg.BitcoinMainNetParams
 	}
-	if cfg.Bitcoin.TestNet3 {
+	if cfg.TestNet3 {
 		numNets++
 		cfg.ActiveNetParams = chainreg.BitcoinTestNetParams
 	}
-	if cfg.Bitcoin.RegTest {
+	if cfg.RegTest {
 		numNets++
 		cfg.ActiveNetParams = chainreg.BitcoinRegTestNetParams
 	}
-	if cfg.Bitcoin.SimNet {
+	if cfg.SimNet {
 		numNets++
 		cfg.ActiveNetParams = chainreg.BitcoinSimNetParams
 	}
-	if cfg.Bitcoin.SigNet {
+	if cfg.SigNet {
 		numNets++
 		cfg.ActiveNetParams = chainreg.BitcoinSigNetParams
 
@@ -475,9 +475,9 @@ func ValidateConfig(cfg Config, interceptor signal.Interceptor, fileParser,
 		// discovery.
 		sigNetChallenge := chaincfg.DefaultSignetChallenge
 		sigNetSeeds := chaincfg.DefaultSignetDNSSeeds
-		if cfg.Bitcoin.SigNetChallenge != "" {
+		if cfg.SigNetChallenge != "" {
 			challenge, err := hex.DecodeString(
-				cfg.Bitcoin.SigNetChallenge,
+				cfg.SigNetChallenge,
 			)
 			if err != nil {
 				return nil, mkErr("Invalid "+
@@ -487,11 +487,11 @@ func ValidateConfig(cfg Config, interceptor signal.Interceptor, fileParser,
 			sigNetChallenge = challenge
 		}
 
-		if len(cfg.Bitcoin.SigNetSeedNode) > 0 {
+		if len(cfg.SigNetSeedNode) > 0 {
 			sigNetSeeds = make([]chaincfg.DNSSeed, len(
-				cfg.Bitcoin.SigNetSeedNode,
+				cfg.SigNetSeedNode,
 			))
-			for idx, seed := range cfg.Bitcoin.SigNetSeedNode {
+			for idx, seed := range cfg.SigNetSeedNode {
 				sigNetSeeds[idx] = chaincfg.DNSSeed{
 					Host:         seed,
 					HasFiltering: false,
@@ -519,15 +519,6 @@ func ValidateConfig(cfg Config, interceptor signal.Interceptor, fileParser,
 			"must be specified"
 		return nil, mkErr(str)
 	}
-
-	cfg.Bitcoin.ChainDir = filepath.Join(
-		cfg.DataDir, defaultChainSubDirname,
-		chainreg.BitcoinChain.String(),
-	)
-
-	// Finally we'll register the bitcoin chain as our current
-	// primary chain.
-	cfg.registeredChains.RegisterPrimaryChain(chainreg.BitcoinChain)
 
 	// Validate profile port or host:port.
 	if cfg.Profile != "" {
@@ -558,7 +549,7 @@ func ValidateConfig(cfg Config, interceptor signal.Interceptor, fileParser,
 	// store all the data specific to this chain/network.
 	cfg.networkDir = filepath.Join(
 		cfg.DataDir, defaultChainSubDirname,
-		cfg.registeredChains.PrimaryChain().String(),
+		chainreg.BitcoinChain.String(),
 		lncfg.NormalizeNetwork(cfg.ActiveNetParams.Name),
 	)
 
@@ -594,7 +585,7 @@ func ValidateConfig(cfg Config, interceptor signal.Interceptor, fileParser,
 	// Append the network type to the log directory so it is "namespaced"
 	// per network in the same fashion as the data directory.
 	cfg.LogDir = filepath.Join(
-		cfg.LogDir, cfg.registeredChains.PrimaryChain().String(),
+		cfg.LogDir, chainreg.BitcoinChain.String(),
 		lncfg.NormalizeNetwork(cfg.ActiveNetParams.Name),
 	)
 
