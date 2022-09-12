@@ -41,18 +41,6 @@ type GrpcRegistrar interface {
 	RegisterGrpcSubserver(*grpc.Server) error
 }
 
-// RestRegistrar is an interface that must be satisfied by an external subserver
-// that wants to be able to register its own REST mux onto lnd's main
-// proxy.ServeMux instance.
-type RestRegistrar interface {
-	// RegisterRestSubserver is called after lnd creates the main
-	// proxy.ServeMux instance. External subservers implementing this method
-	// can then register their own REST proxy stubs to the main server
-	// instance.
-	RegisterRestSubserver(context.Context, *proxy.ServeMux, string,
-		[]grpc.DialOption) error
-}
-
 // ExternalValidator is an interface that must be satisfied by an external
 // macaroon validator.
 type ExternalValidator interface {
@@ -101,10 +89,6 @@ type ImplementationCfg struct {
 	// GrpcRegistrar is a type that can register additional gRPC subservers
 	// before the main gRPC server is started.
 	GrpcRegistrar
-
-	// RestRegistrar is a type that can register additional REST subservers
-	// before the main REST proxy is started.
-	RestRegistrar
 
 	// ExternalValidator is a type that can provide external macaroon
 	// validation.

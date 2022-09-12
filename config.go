@@ -748,7 +748,6 @@ func (c *Config) ImplementationConfig(
 	defaultImpl := NewDefaultWalletImpl(c, ltndLog, interceptor, false)
 	return &ImplementationCfg{
 		GrpcRegistrar:       defaultImpl,
-		RestRegistrar:       defaultImpl,
 		ExternalValidator:   defaultImpl,
 		DatabaseBuilder:     NewDefaultDatabaseBuilder(c, ltndLog),
 		WalletConfigBuilder: defaultImpl,

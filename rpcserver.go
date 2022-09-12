@@ -731,16 +731,6 @@ func (r *rpcServer) RegisterWithRestProxy(restCtx context.Context,
 		}
 	}
 
-	// Before listening on any of the interfaces, we also want to give the
-	// external subservers a chance to register their own REST proxy stub
-	// with our mux instance.
-	err = r.implCfg.RegisterRestSubserver(
-		restCtx, restMux, restProxyDest, restDialOpts,
-	)
-	if err != nil {
-		rpcsLog.Errorf("error registering external REST subserver: %v",
-			err)
-	}
 	return nil
 }
 
