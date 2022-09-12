@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 
 	"github.com/btcsuite/btcd/btcutil"
-	proxy "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnrpc"
@@ -700,34 +699,6 @@ func (r *rpcServer) Start() error {
 
 		if err := subServer.Start(); err != nil {
 			return err
-		}
-	}
-
-	return nil
-}
-
-// RegisterWithRestProxy registers the RPC server and any subservers with the
-// given REST proxy.
-func (r *rpcServer) RegisterWithRestProxy(restCtx context.Context,
-	restMux *proxy.ServeMux, restDialOpts []grpc.DialOption,
-	restProxyDest string) error {
-
-	// With our custom REST proxy mux created, register our main RPC and
-	// give all subservers a chance to register as well.
-	err := lnrpc.RegisterLightningHandlerFromEndpoint(
-		restCtx, restMux, restProxyDest, restDialOpts,
-	)
-	if err != nil {
-		return err
-	}
-
-	for _, subServer := range r.subGrpcHandlers {
-		err := subServer.RegisterWithRestServer(
-			restCtx, restMux, restProxyDest, restDialOpts,
-		)
-		if err != nil {
-			return fmt.Errorf("unable to register REST sub-server "+
-				"with root: %v", err)
 		}
 	}
 

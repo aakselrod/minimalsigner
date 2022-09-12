@@ -9,7 +9,6 @@ import (
 
 	"github.com/btcsuite/btclog"
 	"github.com/btcsuite/btcwallet/wallet"
-	proxy "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/kvdb"
@@ -130,20 +129,6 @@ func NewDefaultWalletImpl(cfg *Config, logger btclog.Logger,
 		watchOnly:   watchOnly,
 		pwService:   createWalletUnlockerService(cfg),
 	}
-}
-
-// RegisterRestSubserver is called after lnd creates the main proxy.ServeMux
-// instance. External subservers implementing this method can then register
-// their own REST proxy stubs to the main server instance.
-//
-// NOTE: This is part of the GrpcRegistrar interface.
-func (d *DefaultWalletImpl) RegisterRestSubserver(ctx context.Context,
-	mux *proxy.ServeMux, restProxyDest string,
-	restDialOpts []grpc.DialOption) error {
-
-	return lnrpc.RegisterWalletUnlockerHandlerFromEndpoint(
-		ctx, mux, restProxyDest, restDialOpts,
-	)
 }
 
 // RegisterGrpcSubserver is called for each net.Listener on which lnd creates a

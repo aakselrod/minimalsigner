@@ -38,7 +38,6 @@ const (
 	defaultLogDirname       = "logs"
 	defaultLogFilename      = "lnd.log"
 	defaultRPCPort          = 10009
-	defaultRESTPort         = 8080
 	defaultRPCHost          = "localhost"
 
 	defaultMaxLogFiles        = 3
@@ -105,8 +104,8 @@ type Config struct {
 	DataDir      string `short:"b" long:"datadir" description:"The directory to store lnd's data within"`
 	SyncFreelist bool   `long:"sync-freelist" description:"Whether the databases used within lnd should sync their freelist to disk. This is disabled by default resulting in improved memory performance during operation, but with an increase in startup time."`
 
-	TLSCertPath        string        `long:"tlscertpath" description:"Path to write the TLS certificate for lnd's RPC and REST services"`
-	TLSKeyPath         string        `long:"tlskeypath" description:"Path to write the TLS private key for lnd's RPC and REST services"`
+	TLSCertPath        string        `long:"tlscertpath" description:"Path to write the TLS certificate for lnd's RPC services"`
+	TLSKeyPath         string        `long:"tlskeypath" description:"Path to write the TLS private key for lnd's RPC services"`
 	TLSExtraIPs        []string      `long:"tlsextraip" description:"Adds an extra ip to the generated certificate"`
 	TLSExtraDomains    []string      `long:"tlsextradomain" description:"Adds an extra domain to the generated certificate"`
 	TLSAutoRefresh     bool          `long:"tlsautorefresh" description:"Re-generate TLS certificate and key if the IPs or domains are changed"`
@@ -114,8 +113,8 @@ type Config struct {
 	TLSCertDuration    time.Duration `long:"tlscertduration" description:"The duration for which the auto-generated TLS certificate will be valid for"`
 
 	NoMacaroons    bool   `long:"no-macaroons" description:"Disable macaroon authentication, can only be used if server is not listening on a public interface."`
-	AdminMacPath   string `long:"adminmacaroonpath" description:"Path to write the admin macaroon for lnd's RPC and REST services if it doesn't exist"`
-	ReadMacPath    string `long:"readonlymacaroonpath" description:"Path to write the read-only macaroon for lnd's RPC and REST services if it doesn't exist"`
+	AdminMacPath   string `long:"adminmacaroonpath" description:"Path to write the admin macaroon for lnd's RPC services if it doesn't exist"`
+	ReadMacPath    string `long:"readonlymacaroonpath" description:"Path to write the read-only macaroon for lnd's RPC services if it doesn't exist"`
 	LogDir         string `long:"logdir" description:"Directory to log output."`
 	MaxLogFiles    int    `long:"maxlogfiles" description:"Maximum logfiles to keep (0 for no rotation)"`
 	MaxLogFileSize int    `long:"maxlogfilesize" description:"Maximum logfile size in MB"`
@@ -128,16 +127,9 @@ type Config struct {
 	// loadConfig function. We need to expose the 'raw' strings so the
 	// command line library can access them.
 	// Only the parsed net.Addrs should be used!
-	RawRPCListeners  []string `long:"rpclisten" description:"Add an interface/port/socket to listen for RPC connections"`
-	RawRESTListeners []string `long:"restlisten" description:"Add an interface/port/socket to listen for REST connections"`
-	ExternalHosts    []string `long:"externalhosts" description:"Add a hostname:port that should be periodically resolved to announce IPs for. If a port is not specified, the default (9735) will be used."`
-	RPCListeners     []net.Addr
-	RESTListeners    []net.Addr
-	RestCORS         []string      `long:"restcors" description:"Add an ip:port/hostname to allow cross origin access from. To allow all origins, set as \"*\"."`
-	DisableRest      bool          `long:"norest" description:"Disable REST API"`
-	DisableRestTLS   bool          `long:"no-rest-tls" description:"Disable TLS for REST connections"`
-	WSPingInterval   time.Duration `long:"ws-ping-interval" description:"The ping interval for REST based WebSocket connections, set to 0 to disable sending ping messages from the server side"`
-	WSPongWait       time.Duration `long:"ws-pong-wait" description:"The time we wait for a pong response message on REST based WebSocket connections before the connection is closed as inactive"`
+	RawRPCListeners []string `long:"rpclisten" description:"Add an interface/port/socket to listen for RPC connections"`
+	ExternalHosts   []string `long:"externalhosts" description:"Add a hostname:port that should be periodically resolved to announce IPs for. If a port is not specified, the default (9735) will be used."`
+	RPCListeners    []net.Addr
 
 	DebugLevel string `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <global-level>,<subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
 
@@ -646,12 +638,6 @@ func ValidateConfig(cfg Config, interceptor signal.Interceptor, fileParser,
 		cfg.RawRPCListeners = append(cfg.RawRPCListeners, addr)
 	}
 
-	// Listen on localhost if no REST listeners were specified.
-	if len(cfg.RawRESTListeners) == 0 {
-		addr := fmt.Sprintf("localhost:%d", defaultRESTPort)
-		cfg.RawRESTListeners = append(cfg.RawRESTListeners, addr)
-	}
-
 	// Add default port to all RPC listener addresses if needed and remove
 	// duplicate addresses.
 	cfg.RPCListeners, err = lncfg.NormalizeAddresses(
@@ -660,16 +646,6 @@ func ValidateConfig(cfg Config, interceptor signal.Interceptor, fileParser,
 	)
 	if err != nil {
 		return nil, mkErr("error normalizing RPC listen addrs: %v", err)
-	}
-
-	// Add default port to all REST listener addresses if needed and remove
-	// duplicate addresses.
-	cfg.RESTListeners, err = lncfg.NormalizeAddresses(
-		cfg.RawRESTListeners, strconv.Itoa(defaultRESTPort),
-		net.ResolveTCPAddr,
-	)
-	if err != nil {
-		return nil, mkErr("error normalizing REST listen addrs: %v", err)
 	}
 
 	switch {
@@ -687,7 +663,7 @@ func ValidateConfig(cfg Config, interceptor signal.Interceptor, fileParser,
 			"not exist", cfg.WalletUnlockPasswordFile)
 	}
 
-	// For each of the RPC listeners (REST+gRPC), we'll ensure that users
+	// For each of the gRPC listeners, we'll ensure that users
 	// have specified a safe combo for authentication. If not, we'll bail
 	// out with an error. Since we don't allow disabling TLS for gRPC
 	// connections we pass in tlsActive=true.
@@ -697,19 +673,6 @@ func ValidateConfig(cfg Config, interceptor signal.Interceptor, fileParser,
 	if err != nil {
 		return nil, mkErr("error enforcing safe authentication on "+
 			"RPC ports: %v", err)
-	}
-
-	if cfg.DisableRest {
-		ltndLog.Infof("REST API is disabled!")
-		cfg.RESTListeners = nil
-	} else {
-		err = lncfg.EnforceSafeAuthentication(
-			cfg.RESTListeners, !cfg.NoMacaroons, !cfg.DisableRestTLS,
-		)
-		if err != nil {
-			return nil, mkErr("error enforcing safe "+
-				"authentication on REST ports: %v", err)
-		}
 	}
 
 	// Newer versions of lnd added a new sub-config for bolt-specific
