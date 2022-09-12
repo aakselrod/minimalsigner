@@ -7,7 +7,6 @@ package minimalsigner
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -19,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	proxy "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/keychain"
@@ -33,7 +31,6 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/protobuf/encoding/protojson"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 	"gopkg.in/macaroon.v2"
 )
@@ -123,10 +120,6 @@ type ListenerCfg struct {
 	RPCListeners []*ListenerWithSignal
 }
 
-var errStreamIsolationWithProxySkip = errors.New(
-	"while stream isolation is enabled, the TOR proxy may not be skipped",
-)
-
 // Main is the true entry point for lnd. It accepts a fully populated and
 // validated main configuration struct and an optional listener config struct.
 // This function starts all main system components then blocks until a signal
@@ -203,7 +196,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 	defer cancel()
 
 	// Only process macaroons if --no-macaroons isn't set.
-	serverOpts, restDialOpts, restListen, cleanUp, err := getTLSConfig(cfg)
+	serverOpts, cleanUp, err := getTLSConfig(cfg)
 	if err != nil {
 		return mkErr("unable to load TLS credentials: %v", err)
 	}
@@ -278,18 +271,6 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 	if err != nil {
 		return mkErr("error starting gRPC listener: %v", err)
 	}
-
-	// Now start the REST proxy for our gRPC server above. We'll ensure
-	// we direct LND to connect to its loopback address rather than a
-	// wildcard to prevent certificate issues when accessing the proxy
-	// externally.
-	stopProxy, err := startRestProxy(
-		cfg, rpcServer, restDialOpts, restListen,
-	)
-	if err != nil {
-		return mkErr("error starting REST proxy: %v", err)
-	}
-	defer stopProxy()
 
 	// Start leader election if we're running on etcd. Continuation will be
 	// blocked until this instance is elected as the current leader or
@@ -420,10 +401,8 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 	return nil
 }
 
-// getTLSConfig returns a TLS configuration for the gRPC server and credentials
-// and a proxy destination for the REST reverse proxy.
-func getTLSConfig(cfg *Config) ([]grpc.ServerOption, []grpc.DialOption,
-	func(net.Addr) (net.Listener, error), func(), error) {
+// getTLSConfig returns a TLS configuration for the gRPC server.
+func getTLSConfig(cfg *Config) ([]grpc.ServerOption, func(), error) {
 
 	// Ensure we create TLS key and certificate if they don't exist.
 	if !fileExists(cfg.TLSCertPath) && !fileExists(cfg.TLSKeyPath) {
@@ -434,7 +413,7 @@ func getTLSConfig(cfg *Config) ([]grpc.ServerOption, []grpc.DialOption,
 			cfg.TLSDisableAutofill, cfg.TLSCertDuration,
 		)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, err
 		}
 		rpcsLog.Infof("Done generating TLS certificates")
 	}
@@ -443,7 +422,7 @@ func getTLSConfig(cfg *Config) ([]grpc.ServerOption, []grpc.DialOption,
 		cfg.TLSCertPath, cfg.TLSKeyPath,
 	)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	// We check whether the certificate we have on disk match the IPs and
@@ -457,7 +436,7 @@ func getTLSConfig(cfg *Config) ([]grpc.ServerOption, []grpc.DialOption,
 			cfg.TLSExtraDomains, cfg.TLSDisableAutofill,
 		)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, err
 		}
 	}
 
@@ -469,12 +448,12 @@ func getTLSConfig(cfg *Config) ([]grpc.ServerOption, []grpc.DialOption,
 
 		err := os.Remove(cfg.TLSCertPath)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, err
 		}
 
 		err = os.Remove(cfg.TLSKeyPath)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, err
 		}
 
 		rpcsLog.Infof("Renewing TLS certificates...")
@@ -484,7 +463,7 @@ func getTLSConfig(cfg *Config) ([]grpc.ServerOption, []grpc.DialOption,
 			cfg.TLSDisableAutofill, cfg.TLSCertDuration,
 		)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, err
 		}
 		rpcsLog.Infof("Done renewing TLS certificates")
 
@@ -493,16 +472,11 @@ func getTLSConfig(cfg *Config) ([]grpc.ServerOption, []grpc.DialOption,
 			cfg.TLSCertPath, cfg.TLSKeyPath,
 		)
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, err
 		}
 	}
 
 	tlsCfg := cert.TLSConfFromCert(certData)
-
-	restCreds, err := credentials.NewClientTLSFromFile(cfg.TLSCertPath, "")
-	if err != nil {
-		return nil, nil, nil, nil, err
-	}
 
 	// If Let's Encrypt is enabled, instantiate autocert to request/renew
 	// the certificates.
@@ -564,31 +538,7 @@ func getTLSConfig(cfg *Config) ([]grpc.ServerOption, []grpc.DialOption,
 	serverCreds := credentials.NewTLS(tlsCfg)
 	serverOpts := []grpc.ServerOption{grpc.Creds(serverCreds)}
 
-	// For our REST dial options, we'll still use TLS, but also increase
-	// the max message size that we'll decode to allow clients to hit
-	// endpoints which return more data such as the DescribeGraph call.
-	// We set this to 200MiB atm. Should be the same value as maxMsgRecvSize
-	// in cmd/lncli/main.go.
-	restDialOpts := []grpc.DialOption{
-		grpc.WithTransportCredentials(restCreds),
-		grpc.WithDefaultCallOptions(
-			grpc.MaxCallRecvMsgSize(lnrpc.MaxGrpcMsgSize),
-		),
-	}
-
-	// Return a function closure that can be used to listen on a given
-	// address with the current TLS config.
-	restListen := func(addr net.Addr) (net.Listener, error) {
-		// For restListen we will call ListenOnAddress if TLS is
-		// disabled.
-		if cfg.DisableRestTLS {
-			return lncfg.ListenOnAddress(addr)
-		}
-
-		return lncfg.TLSListenOnAddress(addr, tlsCfg)
-	}
-
-	return serverOpts, restDialOpts, restListen, cleanUp, nil
+	return serverOpts, cleanUp, nil
 }
 
 // fileExists reports whether the named file or directory exists.
@@ -707,130 +657,4 @@ func startGrpcListen(cfg *Config, grpcServer *grpc.Server,
 	wg.Wait()
 
 	return nil
-}
-
-// startRestProxy starts the given REST proxy on the listeners found in the
-// config.
-func startRestProxy(cfg *Config, rpcServer *rpcServer, restDialOpts []grpc.DialOption,
-	restListen func(net.Addr) (net.Listener, error)) (func(), error) {
-
-	// We use the first RPC listener as the destination for our REST proxy.
-	// If the listener is set to listen on all interfaces, we replace it
-	// with localhost, as we cannot dial it directly.
-	restProxyDest := cfg.RPCListeners[0].String()
-	switch {
-	case strings.Contains(restProxyDest, "0.0.0.0"):
-		restProxyDest = strings.Replace(
-			restProxyDest, "0.0.0.0", "127.0.0.1", 1,
-		)
-
-	case strings.Contains(restProxyDest, "[::]"):
-		restProxyDest = strings.Replace(
-			restProxyDest, "[::]", "[::1]", 1,
-		)
-	}
-
-	var shutdownFuncs []func()
-	shutdown := func() {
-		for _, shutdownFn := range shutdownFuncs {
-			shutdownFn()
-		}
-	}
-
-	// Start a REST proxy for our gRPC server.
-	ctx := context.Background()
-	ctx, cancel := context.WithCancel(ctx)
-	shutdownFuncs = append(shutdownFuncs, cancel)
-
-	// We'll set up a proxy that will forward REST calls to the GRPC
-	// server.
-	//
-	// The default JSON marshaler of the REST proxy only sets OrigName to
-	// true, which instructs it to use the same field names as specified in
-	// the proto file and not switch to camel case. What we also want is
-	// that the marshaler prints all values, even if they are falsey.
-	customMarshalerOption := proxy.WithMarshalerOption(
-		proxy.MIMEWildcard, &proxy.JSONPb{
-			MarshalOptions: protojson.MarshalOptions{
-				UseProtoNames:   true,
-				EmitUnpopulated: true,
-			},
-		},
-	)
-	mux := proxy.NewServeMux(
-		customMarshalerOption,
-
-		// Don't allow falling back to other HTTP methods, we want exact
-		// matches only. The actual method to be used can be overwritten
-		// by setting X-HTTP-Method-Override so there should be no
-		// reason for not specifying the correct method in the first
-		// place.
-		proxy.WithDisablePathLengthFallback(),
-	)
-
-	// Register our services with the REST proxy.
-	err := lnrpc.RegisterStateHandlerFromEndpoint(
-		ctx, mux, restProxyDest, restDialOpts,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	err = rpcServer.RegisterWithRestProxy(
-		ctx, mux, restDialOpts, restProxyDest,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Wrap the default grpc-gateway handler with the WebSocket handler.
-	restHandler := lnrpc.NewWebSocketProxy(
-		mux, rpcsLog, cfg.WSPingInterval, cfg.WSPongWait,
-		lnrpc.LndClientStreamingURIs,
-	)
-
-	// Use a WaitGroup so we can be sure the instructions on how to input the
-	// password is the last thing to be printed to the console.
-	var wg sync.WaitGroup
-
-	// Now spin up a network listener for each requested port and start a
-	// goroutine that serves REST with the created mux there.
-	for _, restEndpoint := range cfg.RESTListeners {
-		lis, err := restListen(restEndpoint)
-		if err != nil {
-			ltndLog.Errorf("gRPC proxy unable to listen on %s",
-				restEndpoint)
-			return nil, err
-		}
-
-		shutdownFuncs = append(shutdownFuncs, func() {
-			err := lis.Close()
-			if err != nil {
-				rpcsLog.Errorf("Error closing listener: %v",
-					err)
-			}
-		})
-
-		wg.Add(1)
-		go func() {
-			rpcsLog.Infof("gRPC proxy started at %s", lis.Addr())
-
-			// Create our proxy chain now. A request will pass
-			// through the following chain:
-			// req ---> CORS handler --> WS proxy --->
-			//   REST proxy --> gRPC endpoint
-			corsHandler := allowCORS(restHandler, cfg.RestCORS)
-
-			wg.Done()
-			err := http.Serve(lis, corsHandler)
-			if err != nil && !lnrpc.IsClosedConnError(err) {
-				rpcsLog.Error(err)
-			}
-		}()
-	}
-
-	// Wait for REST servers to be up running.
-	wg.Wait()
-
-	return shutdown, nil
 }
