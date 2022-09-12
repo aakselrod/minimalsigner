@@ -190,8 +190,6 @@ func DefaultConfig() Config {
 		LogDir:            defaultLogDir,
 		MaxLogFiles:       defaultMaxLogFiles,
 		MaxLogFileSize:    defaultMaxLogFileSize,
-		WSPingInterval:    lnrpc.DefaultPingInterval,
-		WSPongWait:        lnrpc.DefaultPongWait,
 		Bitcoin:           &lncfg.Chain{},
 		SubRPCServers: &subRPCServerConfigs{
 			SignRPC: &signrpc.Config{},

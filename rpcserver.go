@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -730,58 +729,6 @@ func (r *rpcServer) Stop() error {
 	}
 
 	return nil
-}
-
-// allowCORS wraps the given http.Handler with a function that adds the
-// Access-Control-Allow-Origin header to the response.
-func allowCORS(handler http.Handler, origins []string) http.Handler {
-	allowHeaders := "Access-Control-Allow-Headers"
-	allowMethods := "Access-Control-Allow-Methods"
-	allowOrigin := "Access-Control-Allow-Origin"
-
-	// If the user didn't supply any origins that means CORS is disabled
-	// and we should return the original handler.
-	if len(origins) == 0 {
-		return handler
-	}
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-
-		// Skip everything if the browser doesn't send the Origin field.
-		if origin == "" {
-			handler.ServeHTTP(w, r)
-			return
-		}
-
-		// Set the static header fields first.
-		w.Header().Set(
-			allowHeaders,
-			"Content-Type, Accept, Grpc-Metadata-Macaroon",
-		)
-		w.Header().Set(allowMethods, "GET, POST, DELETE")
-
-		// Either we allow all origins or the incoming request matches
-		// a specific origin in our list of allowed origins.
-		for _, allowedOrigin := range origins {
-			if allowedOrigin == "*" || origin == allowedOrigin {
-				// Only set allowed origin to requested origin.
-				w.Header().Set(allowOrigin, origin)
-
-				break
-			}
-		}
-
-		// For a pre-flight request we only need to send the headers
-		// back. No need to call the rest of the chain.
-		if r.Method == "OPTIONS" {
-			return
-		}
-
-		// Everything's prepared now, we can pass the request along the
-		// chain of handlers.
-		handler.ServeHTTP(w, r)
-	})
 }
 
 // NewAddress creates a new address under control of the local wallet.
