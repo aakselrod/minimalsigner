@@ -27,6 +27,10 @@ var (
 	// permissions for authorization purposes, all lowercase.
 	readPermissions = []bakery.Op{
 		{
+			Entity: "onchain",
+			Action: "read",
+		},
+		{
 			Entity: "address",
 			Action: "read",
 		},
