@@ -5,8 +5,6 @@ import (
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/healthcheck"
-	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/walletrpc"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwallet/btcwallet"
 	"github.com/lightningnetwork/lnd/rpcperms"
@@ -91,8 +89,6 @@ func SetupLoggers(root *build.RotatingLogWriter, interceptor signal.Interceptor)
 	signal.UseLogger(ltndLog)
 
 	AddSubLogger(root, "LNWL", interceptor, lnwallet.UseLogger)
-	AddSubLogger(root, "SGNR", interceptor, signrpc.UseLogger)
-	AddSubLogger(root, "WLKT", interceptor, walletrpc.UseLogger)
 
 	AddSubLogger(root, healthcheck.Subsystem, interceptor, healthcheck.UseLogger)
 	AddSubLogger(root, chainreg.Subsystem, interceptor, chainreg.UseLogger)

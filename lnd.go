@@ -361,7 +361,7 @@ func Main(cfg *Config, lisCfg ListenerCfg, implCfg *ImplementationCfg,
 	// Now we have created all dependencies necessary to populate and
 	// start the RPC server.
 	err = rpcServer.addDeps(
-		server, interceptorChain.MacaroonService(), cfg.SubRPCServers,
+		server, interceptorChain.MacaroonService(),
 	)
 	if err != nil {
 		return mkErr("unable to add deps to RPC server: %v", err)

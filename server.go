@@ -16,7 +16,6 @@ import (
 	"github.com/lightningnetwork/lnd/netann"
 	"github.com/lightningnetwork/lnd/pool"
 	"github.com/lightningnetwork/lnd/subscribe"
-	"github.com/lightningnetwork/lnd/sweep"
 )
 
 var (
@@ -52,8 +51,6 @@ type server struct {
 	mu sync.RWMutex
 
 	cc *chainreg.ChainControl
-
-	sweeper *sweep.UtxoSweeper
 
 	sigPool *lnwallet.SigPool
 
@@ -120,24 +117,6 @@ func newServer(cfg *Config, dbs *DatabaseInstances, cc *chainreg.ChainControl,
 
 		quit: make(chan struct{}),
 	}
-
-	// TODO(aakselrod): Eliminate need for sweeper as signer doesn't sweep.
-	s.sweeper = sweep.New(&sweep.UtxoSweeperConfig{
-		FeeEstimator:   cc.FeeEstimator,
-		GenSweepScript: newSweepPkScriptGen(cc.Wallet),
-		Signer:         cc.Signer,
-		Wallet:         cc.Wallet,
-		NewBatchTimer: func() <-chan time.Time {
-			return time.NewTimer(sweep.DefaultBatchWindowDuration).C
-		},
-		Notifier:             cc.ChainNotifier,
-		Store:                sweep.NewMockSweeperStore(),
-		MaxInputsPerTx:       sweep.DefaultMaxInputsPerTx,
-		MaxSweepAttempts:     sweep.DefaultMaxSweepAttempts,
-		NextAttemptDeltaFunc: sweep.DefaultNextAttemptDeltaFunc,
-		MaxFeeRate:           sweep.DefaultMaxFeeRate,
-		FeeRateBucketSize:    sweep.DefaultFeeRateBucketSize,
-	})
 
 	// Create liveliness monitor.
 	s.createLivenessMonitor(cfg, cc)

@@ -23,7 +23,6 @@ import (
 	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"github.com/lightningnetwork/lnd/lnrpc"
-	"github.com/lightningnetwork/lnd/lnrpc/signrpc"
 	"github.com/lightningnetwork/lnd/signal"
 )
 
@@ -145,8 +144,6 @@ type Config struct {
 	SigNetChallenge string   `long:"signetchallenge" description:"Connect to a custom signet network defined by this challenge instead of using the global default signet test network -- Can be specified multiple times"`
 	SigNetSeedNode  []string `long:"signetseednode" description:"Specify a seed node for the signet network instead of using the global default signet network seed nodes"`
 
-	SubRPCServers *subRPCServerConfigs `group:"subrpc"`
-
 	WalletUnlockPasswordFile string `long:"wallet-unlock-password-file" description:"The full path to a file (or pipe/device) that contains the password for unlocking the wallet; if set, no unlocking through RPC is possible and lnd will exit if no wallet exists or the password is incorrect; if wallet-unlock-allow-create is also set then lnd will ignore this flag if no wallet exists and allow a wallet to be created through RPC."`
 	WalletUnlockAllowCreate  bool   `long:"wallet-unlock-allow-create" description:"Don't fail with an error if wallet-unlock-password-file is set but no wallet exists yet."`
 
@@ -192,9 +189,6 @@ func DefaultConfig() Config {
 		LogDir:            defaultLogDir,
 		MaxLogFiles:       defaultMaxLogFiles,
 		MaxLogFileSize:    defaultMaxLogFileSize,
-		SubRPCServers: &subRPCServerConfigs{
-			SignRPC: &signrpc.Config{},
-		},
 		Workers: &lncfg.Workers{
 			Read:  lncfg.DefaultReadWorkers,
 			Write: lncfg.DefaultWriteWorkers,
@@ -699,7 +693,6 @@ func (c *Config) ImplementationConfig(
 
 	defaultImpl := NewDefaultWalletImpl(c, ltndLog, interceptor, false)
 	return &ImplementationCfg{
-		GrpcRegistrar:       defaultImpl,
 		ExternalValidator:   defaultImpl,
 		DatabaseBuilder:     NewDefaultDatabaseBuilder(c, ltndLog),
 		WalletConfigBuilder: defaultImpl,

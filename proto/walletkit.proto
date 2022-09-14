@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "github.com/aakselrod/minimalsigner/proto";
+
+// WalletKit is a service that gives access to the core functionalities of the
+// daemon's wallet.
+service WalletKit {
+  /*
+  ListAccounts retrieves all accounts belonging to the wallet by default. A
+  name and key scope filter can be provided to filter through all of the
+  wallet accounts and return only those matching.
+  */
+  rpc ListAccounts(ListAccountsRequest) returns (ListAccountsResponse);
+
+  /*
+  SignPsbt expects a partial transaction with all inputs and outputs fully
+  declared and tries to sign all unsigned inputs that have all required fields
+  (UTXO information, BIP32 derivation information, witness or sig scripts)
+  set.
+  If no error is returned, the PSBT is ready to be given to the next signer or
+  to be finalized if lnd was the last signer.
+
+  NOTE: This RPC only signs inputs (and only those it can sign), it does not
+  perform any other tasks (such as coin selection, UTXO locking or
+  input/output/fee value validation, PSBT finalization). Any input that is
+  incomplete will be skipped.
+  */
+  rpc SignPsbt(SignPsbtRequest) returns (SignPsbtResponse);
+}
+
+enum AddressType {
+  UNKNOWN = 0;
+  WITNESS_PUBKEY_HASH = 1;
+  NESTED_WITNESS_PUBKEY_HASH = 2;
+  HYBRID_NESTED_WITNESS_PUBKEY_HASH = 3;
+  TAPROOT_PUBKEY = 4;
+}
+message Account {
+  // The name used to identify the account.
+  string name = 1;
+
+  // The type of addresses the account supports.
+  AddressType address_type = 2;
+
+  /*
+  The public key backing the account that all keys are derived from
+  represented as an extended key. This will always be empty for the default
+  imported account in which single public keys are imported into.
+  */
+  string extended_public_key = 3;
+
+  /*
+  The fingerprint of the root key from which the account public key was
+  derived from. This will always be zero for the default imported account in
+  which single public keys are imported into. The bytes are in big-endian
+  order.
+  */
+  bytes master_key_fingerprint = 4;
+
+  /*
+  The derivation path corresponding to the account public key. This will
+  always be empty for the default imported account in which single public keys
+  are imported into.
+  */
+  string derivation_path = 5;
+
+  /*
+  The number of keys derived from the external branch of the account public
+  key. This will always be zero for the default imported account in which
+  single public keys are imported into.
+  */
+  uint32 external_key_count = 6;
+
+  /*
+  The number of keys derived from the internal branch of the account public
+  key. This will always be zero for the default imported account in which
+  single public keys are imported into.
+  */
+  uint32 internal_key_count = 7;
+
+  // Whether the wallet stores private keys for the account.
+  bool watch_only = 8;
+}
+
+message ListAccountsRequest {
+  // An optional filter to only return accounts matching this name.
+  string name = 1;
+
+  // An optional filter to only return accounts matching this address type.
+  AddressType address_type = 2;
+}
+
+message ListAccountsResponse { repeated Account accounts = 1; }
+
+message SignPsbtRequest {
+  /*
+  The PSBT that should be signed. The PSBT must contain all required inputs,
+  outputs, UTXO data and custom fields required to identify the signing key.
+  */
+  bytes funded_psbt = 1;
+}
+
+message SignPsbtResponse {
+  // The signed transaction in PSBT format.
+  bytes signed_psbt = 1;
+
+  // The indices of signed inputs.
+  repeated uint32 signed_inputs = 2;
+}

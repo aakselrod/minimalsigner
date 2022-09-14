@@ -8,10 +8,10 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/aakselrod/minimalsigner/proto"
 	"github.com/lightningnetwork/lnd/build"
 	"github.com/lightningnetwork/lnd/chainreg"
 	"github.com/lightningnetwork/lnd/lncfg"
-	"github.com/lightningnetwork/lnd/lnrpc"
 	"github.com/lightningnetwork/lnd/macaroons"
 	"github.com/lightningnetwork/lnd/rpcperms"
 	"github.com/lightningnetwork/lnd/signal"
@@ -81,7 +81,6 @@ var (
 	validEntities = []string{
 		"onchain", "address", "message",
 		"info", "signer", "macaroon",
-		macaroons.PermissionEntityCustomURI,
 	}
 
 	// If the --no-macaroons flag is used to start lnd, the macaroon service
@@ -176,10 +175,6 @@ func MainRPCServerPermissions() map[string][]bakery.Op {
 			Entity: "macaroon",
 			Action: "read",
 		}},
-		lnrpc.RegisterRPCMiddlewareURI: {{
-			Entity: "macaroon",
-			Action: "write",
-		}},
 	}
 }
 
@@ -192,19 +187,11 @@ type rpcServer struct {
 	// Required by the grpc-gateway/v2 library for forward compatibility.
 	// Must be after the atomically used variables to not break struct
 	// alignment.
-	lnrpc.UnimplementedLightningServer
+	proto.UnimplementedLightningServer
 
 	server *server
 
 	cfg *Config
-
-	// subServers are a set of sub-RPC servers that use the same gRPC and
-	// listening sockets as the main RPC server, but which maintain their
-	// own independent service. This allows us to expose a set of
-	// micro-service like abstractions to the outside world for users to
-	// consume.
-	subServers      []lnrpc.SubServer
-	subGrpcHandlers []lnrpc.GrpcHandler
 
 	quit chan struct{}
 
@@ -225,7 +212,7 @@ type rpcServer struct {
 
 // A compile time check to ensure that rpcServer fully implements the
 // LightningServer gRPC service.
-var _ lnrpc.LightningServer = (*rpcServer)(nil)
+var _ proto.LightningServer = (*rpcServer)(nil)
 
 // newRPCServer creates and returns a new instance of the rpcServer. Before
 // dependencies are added, this will be an non-functioning RPC server only to
@@ -233,21 +220,8 @@ var _ lnrpc.LightningServer = (*rpcServer)(nil)
 func newRPCServer(cfg *Config, interceptorChain *rpcperms.InterceptorChain,
 	implCfg *ImplementationCfg, interceptor signal.Interceptor) *rpcServer {
 
-	// We go trhough the list of registered sub-servers, and create a gRPC
-	// handler for each. These are used to register with the gRPC server
-	// before all dependencies are available.
-	registeredSubServers := lnrpc.RegisteredSubServers()
-
-	var subServerHandlers []lnrpc.GrpcHandler
-	for _, subServer := range registeredSubServers {
-		subServerHandlers = append(
-			subServerHandlers, subServer.NewGrpcHandler(),
-		)
-	}
-
 	return &rpcServer{
 		cfg:              cfg,
-		subGrpcHandlers:  subServerHandlers,
 		interceptorChain: interceptorChain,
 		implCfg:          implCfg,
 		quit:             make(chan struct{}, 1),
@@ -258,43 +232,7 @@ func newRPCServer(cfg *Config, interceptorChain *rpcperms.InterceptorChain,
 // addDeps populates all dependencies needed by the RPC server, and any
 // of the sub-servers that it maintains. When this is done, the RPC server can
 // be started, and start accepting RPC calls.
-func (r *rpcServer) addDeps(s *server, macService *macaroons.Service,
-	subServerCgs *subRPCServerConfigs) error {
-
-	var (
-		subServers     []lnrpc.SubServer
-		subServerPerms []lnrpc.MacaroonPerms
-	)
-
-	// Before we create any of the sub-servers, we need to ensure that all
-	// the dependencies they need are properly populated within each sub
-	// server configuration struct.
-	//
-	// TODO(roasbeef): extend sub-sever config to have both (local vs remote) DB
-	err := subServerCgs.PopulateDependencies(
-		r.cfg, s.cc, r.cfg.networkDir, macService, s.nodeSigner,
-		s.sweeper, r.cfg.ActiveNetParams.Params, rpcsLog,
-	)
-	if err != nil {
-		return err
-	}
-
-	// Now that the sub-servers have all their dependencies in place, we
-	// can create each sub-server!
-	for _, subServerInstance := range r.subGrpcHandlers {
-		subServer, macPerms, err := subServerInstance.CreateSubServer(
-			subServerCgs,
-		)
-		if err != nil {
-			return err
-		}
-
-		// We'll collect the sub-server, and also the set of
-		// permissions it needs for macaroons so we can apply the
-		// interceptors below.
-		subServers = append(subServers, subServer)
-		subServerPerms = append(subServerPerms, macPerms)
-	}
+func (r *rpcServer) addDeps(s *server, macService *macaroons.Service) error {
 
 	// Next, we need to merge the set of sub server macaroon permissions
 	// with the main RPC server permissions so we can unite them under a
@@ -306,12 +244,19 @@ func (r *rpcServer) addDeps(s *server, macService *macaroons.Service,
 		}
 	}
 
-	for _, subServerPerm := range subServerPerms {
-		for method, ops := range subServerPerm {
-			err := r.interceptorChain.AddPermission(method, ops)
-			if err != nil {
-				return err
-			}
+	// Wallet kit permissions.
+	for m, ops := range walletPermissions {
+		err := r.interceptorChain.AddPermission(m, ops)
+		if err != nil {
+			return err
+		}
+	}
+
+	// signer permissions.
+	for m, ops := range signerPermissions {
+		err := r.interceptorChain.AddPermission(m, ops)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -339,8 +284,6 @@ func (r *rpcServer) addDeps(s *server, macService *macaroons.Service,
 	// Finally, with all the set up complete, add the last dependencies to
 	// the rpc server.
 	r.server = s
-	r.subServers = subServers
-	r.macService = macService
 
 	return nil
 }
@@ -349,18 +292,17 @@ func (r *rpcServer) addDeps(s *server, macService *macaroons.Service,
 // root gRPC server.
 func (r *rpcServer) RegisterWithGrpcServer(grpcServer *grpc.Server) error {
 	// Register the main RPC server.
-	lnrpc.RegisterLightningServer(grpcServer, r)
+	proto.RegisterLightningServer(grpcServer, r)
 
-	// Now the main RPC server has been registered, we'll iterate through
-	// all the sub-RPC servers and register them to ensure that requests
-	// are properly routed towards them.
-	for _, subServer := range r.subGrpcHandlers {
-		err := subServer.RegisterWithRootServer(grpcServer)
-		if err != nil {
-			return fmt.Errorf("unable to register "+
-				"sub-server with root: %v", err)
-		}
-	}
+	// Register the wallet subserver.
+	proto.RegisterWalletKitServer(grpcServer, &walletKit{
+		wallet: r.server.cc.Wallet,
+	})
+
+	// Register the signer subserver.
+	proto.RegisterSignerServer(grpcServer, &signerServer{
+		wallet: r.server.cc.Wallet,
+	})
 
 	// Before actually listening on the gRPC listener, give external
 	// subservers the chance to register to our gRPC server. Those external
@@ -383,19 +325,6 @@ func (r *rpcServer) Start() error {
 		return nil
 	}
 
-	// First, we'll start all the sub-servers to ensure that they're ready
-	// to take new requests in.
-	//
-	// TODO(roasbeef): some may require that the entire daemon be started
-	// at that point
-	for _, subServer := range r.subServers {
-		rpcsLog.Debugf("Starting sub RPC server: %v", subServer.Name())
-
-		if err := subServer.Start(); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
@@ -408,20 +337,6 @@ func (r *rpcServer) Stop() error {
 	rpcsLog.Infof("Stopping RPC Server")
 
 	close(r.quit)
-
-	// After we've signalled all of our active goroutines to exit, we'll
-	// then do the same to signal a graceful shutdown of all the sub
-	// servers.
-	for _, subServer := range r.subServers {
-		rpcsLog.Infof("Stopping %v Sub-RPC Server",
-			subServer.Name())
-
-		if err := subServer.Stop(); err != nil {
-			rpcsLog.Errorf("unable to stop sub-server %v: %v",
-				subServer.Name(), err)
-			continue
-		}
-	}
 
 	return nil
 }
@@ -439,7 +354,7 @@ var (
 // returned signature string is zbase32 encoded and pubkey recoverable, meaning
 // that only the message digest and signature are needed for verification.
 func (r *rpcServer) SignMessage(_ context.Context,
-	in *lnrpc.SignMessageRequest) (*lnrpc.SignMessageResponse, error) {
+	in *proto.SignMessageRequest) (*proto.SignMessageResponse, error) {
 
 	if in.Msg == nil {
 		return nil, fmt.Errorf("need a message to sign")
@@ -454,26 +369,26 @@ func (r *rpcServer) SignMessage(_ context.Context,
 	}
 
 	sig := zbase32.EncodeToString(sigBytes)
-	return &lnrpc.SignMessageResponse{Signature: sig}, nil
+	return &proto.SignMessageResponse{Signature: sig}, nil
 }
 
 // GetInfo returns general information concerning the lightning node including
 // its identity pubkey, alias, the chains it is connected to, and information
 // concerning the number of open+pending channels.
 func (r *rpcServer) GetInfo(_ context.Context,
-	_ *lnrpc.GetInfoRequest) (*lnrpc.GetInfoResponse, error) {
+	_ *proto.GetInfoRequest) (*proto.GetInfoResponse, error) {
 
 	idPub := r.server.identityECDH.PubKey().SerializeCompressed()
 	encodedIDPub := hex.EncodeToString(idPub)
 
 	network := lncfg.NormalizeNetwork(r.cfg.ActiveNetParams.Name)
-	activeChains := make([]*lnrpc.Chain, 1)
-	activeChains[0] = &lnrpc.Chain{
+	activeChains := make([]*proto.Chain, 1)
+	activeChains[0] = &proto.Chain{
 		Chain:   chainreg.BitcoinChain.String(),
 		Network: network,
 	}
 
-	return &lnrpc.GetInfoResponse{
+	return &proto.GetInfoResponse{
 		IdentityPubkey: encodedIDPub,
 		Chains:         activeChains,
 		Version:        build.Version() + " commit=" + build.Commit,
@@ -484,7 +399,7 @@ func (r *rpcServer) GetInfo(_ context.Context,
 // StopDaemon will send a shutdown request to the interrupt handler, triggering
 // a graceful shutdown of the daemon.
 func (r *rpcServer) StopDaemon(_ context.Context,
-	_ *lnrpc.StopRequest) (*lnrpc.StopResponse, error) {
+	_ *proto.StopRequest) (*proto.StopResponse, error) {
 
 	// Before we even consider a shutdown, are we currently in recovery
 	// mode? We don't want to allow shutting down during recovery because
@@ -502,7 +417,7 @@ func (r *rpcServer) StopDaemon(_ context.Context,
 	}
 
 	r.interceptor.RequestShutdown()
-	return &lnrpc.StopResponse{}, nil
+	return &proto.StopResponse{}, nil
 }
 
 // DebugLevel allows a caller to programmatically set the logging verbosity of
@@ -510,12 +425,12 @@ func (r *rpcServer) StopDaemon(_ context.Context,
 // level, or in a granular fashion to specify the logging for a target
 // sub-system.
 func (r *rpcServer) DebugLevel(ctx context.Context,
-	req *lnrpc.DebugLevelRequest) (*lnrpc.DebugLevelResponse, error) {
+	req *proto.DebugLevelRequest) (*proto.DebugLevelResponse, error) {
 
 	// If show is set, then we simply print out the list of available
 	// sub-systems.
 	if req.Show {
-		return &lnrpc.DebugLevelResponse{
+		return &proto.DebugLevelResponse{
 			SubSystems: strings.Join(
 				r.cfg.LogWriter.SupportedSubsystems(), " ",
 			),
@@ -531,7 +446,7 @@ func (r *rpcServer) DebugLevel(ctx context.Context,
 		return nil, err
 	}
 
-	return &lnrpc.DebugLevelResponse{}, nil
+	return &proto.DebugLevelResponse{}, nil
 }
 
 // BakeMacaroon allows the creation of a new macaroon with custom read and write
@@ -539,7 +454,7 @@ func (r *rpcServer) DebugLevel(ctx context.Context,
 // If the --allow-external-permissions flag is set, the RPC will allow
 // external permissions that LND is not aware of.
 func (r *rpcServer) BakeMacaroon(ctx context.Context,
-	req *lnrpc.BakeMacaroonRequest) (*lnrpc.BakeMacaroonResponse, error) {
+	req *proto.BakeMacaroonRequest) (*proto.BakeMacaroonResponse, error) {
 
 	rpcsLog.Debugf("[bakemacaroon]")
 
@@ -618,7 +533,7 @@ func (r *rpcServer) BakeMacaroon(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	resp := &lnrpc.BakeMacaroonResponse{}
+	resp := &proto.BakeMacaroonResponse{}
 	resp.Macaroon = hex.EncodeToString(newMacBytes)
 
 	return resp, nil
@@ -626,8 +541,8 @@ func (r *rpcServer) BakeMacaroon(ctx context.Context,
 
 // ListMacaroonIDs returns a list of macaroon root key IDs in use.
 func (r *rpcServer) ListMacaroonIDs(ctx context.Context,
-	req *lnrpc.ListMacaroonIDsRequest) (
-	*lnrpc.ListMacaroonIDsResponse, error) {
+	req *proto.ListMacaroonIDsRequest) (
+	*proto.ListMacaroonIDsResponse, error) {
 
 	rpcsLog.Debugf("[listmacaroonids]")
 
@@ -653,13 +568,13 @@ func (r *rpcServer) ListMacaroonIDs(ctx context.Context,
 		rootKeyIDs = append(rootKeyIDs, id)
 	}
 
-	return &lnrpc.ListMacaroonIDsResponse{RootKeyIds: rootKeyIDs}, nil
+	return &proto.ListMacaroonIDsResponse{RootKeyIds: rootKeyIDs}, nil
 }
 
 // DeleteMacaroonID removes a specific macaroon ID.
 func (r *rpcServer) DeleteMacaroonID(ctx context.Context,
-	req *lnrpc.DeleteMacaroonIDRequest) (
-	*lnrpc.DeleteMacaroonIDResponse, error) {
+	req *proto.DeleteMacaroonIDRequest) (
+	*proto.DeleteMacaroonIDResponse, error) {
 
 	rpcsLog.Debugf("[deletemacaroonid]")
 
@@ -679,7 +594,7 @@ func (r *rpcServer) DeleteMacaroonID(ctx context.Context,
 		return nil, err
 	}
 
-	return &lnrpc.DeleteMacaroonIDResponse{
+	return &proto.DeleteMacaroonIDResponse{
 		// If the root key ID doesn't exist, it won't be deleted. We
 		// will return a response with deleted = false, otherwise true.
 		Deleted: deletedIDBytes != nil,
@@ -689,33 +604,33 @@ func (r *rpcServer) DeleteMacaroonID(ctx context.Context,
 // ListPermissions lists all RPC method URIs and their required macaroon
 // permissions to access them.
 func (r *rpcServer) ListPermissions(_ context.Context,
-	_ *lnrpc.ListPermissionsRequest) (*lnrpc.ListPermissionsResponse,
+	_ *proto.ListPermissionsRequest) (*proto.ListPermissionsResponse,
 	error) {
 
 	rpcsLog.Debugf("[listpermissions]")
 
-	permissionMap := make(map[string]*lnrpc.MacaroonPermissionList)
+	permissionMap := make(map[string]*proto.MacaroonPermissionList)
 	for uri, perms := range r.interceptorChain.Permissions() {
-		rpcPerms := make([]*lnrpc.MacaroonPermission, len(perms))
+		rpcPerms := make([]*proto.MacaroonPermission, len(perms))
 		for idx, perm := range perms {
-			rpcPerms[idx] = &lnrpc.MacaroonPermission{
+			rpcPerms[idx] = &proto.MacaroonPermission{
 				Entity: perm.Entity,
 				Action: perm.Action,
 			}
 		}
-		permissionMap[uri] = &lnrpc.MacaroonPermissionList{
+		permissionMap[uri] = &proto.MacaroonPermissionList{
 			Permissions: rpcPerms,
 		}
 	}
 
-	return &lnrpc.ListPermissionsResponse{
+	return &proto.ListPermissionsResponse{
 		MethodPermissions: permissionMap,
 	}, nil
 }
 
 // CheckMacaroonPermissions checks the caveats and permissions of a macaroon.
 func (r *rpcServer) CheckMacaroonPermissions(ctx context.Context,
-	req *lnrpc.CheckMacPermRequest) (*lnrpc.CheckMacPermResponse, error) {
+	req *proto.CheckMacPermRequest) (*proto.CheckMacPermResponse, error) {
 
 	// Turn grpc macaroon permission into bakery.Op for the server to
 	// process.
@@ -734,144 +649,7 @@ func (r *rpcServer) CheckMacaroonPermissions(ctx context.Context,
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	return &lnrpc.CheckMacPermResponse{
+	return &proto.CheckMacPermResponse{
 		Valid: true,
 	}, nil
-}
-
-// RegisterRPCMiddleware adds a new gRPC middleware to the interceptor chain. A
-// gRPC middleware is software component external to lnd that aims to add
-// additional business logic to lnd by observing/intercepting/validating
-// incoming gRPC client requests and (if needed) replacing/overwriting outgoing
-// messages before they're sent to the client. When registering the middleware
-// must identify itself and indicate what custom macaroon caveats it wants to
-// be responsible for. Only requests that contain a macaroon with that specific
-// custom caveat are then sent to the middleware for inspection. As a security
-// measure, _no_ middleware can intercept requests made with _unencumbered_
-// macaroons!
-func (r *rpcServer) RegisterRPCMiddleware(
-	stream lnrpc.Lightning_RegisterRPCMiddlewareServer) error {
-
-	// This is a security critical functionality and needs to be enabled
-	// specifically by the user.
-	if !r.cfg.RPCMiddleware.Enable {
-		return fmt.Errorf("RPC middleware not enabled in config")
-	}
-
-	// When registering a middleware the first message being sent from the
-	// middleware must be a registration message containing its name and the
-	// custom caveat it wants to register for.
-	var (
-		registerChan     = make(chan *lnrpc.MiddlewareRegistration, 1)
-		registerDoneChan = make(chan struct{})
-		errChan          = make(chan error, 1)
-	)
-	ctxc, cancel := context.WithTimeout(
-		stream.Context(), r.cfg.RPCMiddleware.InterceptTimeout,
-	)
-	defer cancel()
-
-	// Read the first message in a goroutine because the Recv method blocks
-	// until the message arrives.
-	go func() {
-		msg, err := stream.Recv()
-		if err != nil {
-			errChan <- err
-
-			return
-		}
-
-		registerChan <- msg.GetRegister()
-	}()
-
-	// Wait for the initial message to arrive or time out if it takes too
-	// long.
-	var registerMsg *lnrpc.MiddlewareRegistration
-	select {
-	case registerMsg = <-registerChan:
-		if registerMsg == nil {
-			return fmt.Errorf("invalid initial middleware " +
-				"registration message")
-		}
-
-	case err := <-errChan:
-		return fmt.Errorf("error receiving initial middleware "+
-			"registration message: %v", err)
-
-	case <-ctxc.Done():
-		return ctxc.Err()
-
-	case <-r.quit:
-		return ErrServerShuttingDown
-	}
-
-	// Make sure the registration is valid.
-	const nameMinLength = 5
-	if len(registerMsg.MiddlewareName) < nameMinLength {
-		return fmt.Errorf("invalid middleware name, use descriptive "+
-			"name of at least %d characters", nameMinLength)
-	}
-
-	readOnly := registerMsg.ReadOnlyMode
-	caveatName := registerMsg.CustomMacaroonCaveatName
-	switch {
-	case readOnly && len(caveatName) > 0:
-		return fmt.Errorf("cannot set read-only and custom caveat " +
-			"name at the same time")
-
-	case !readOnly && len(caveatName) < nameMinLength:
-		return fmt.Errorf("need to set either custom caveat name "+
-			"of at least %d characters or read-only mode",
-			nameMinLength)
-	}
-
-	middleware := rpcperms.NewMiddlewareHandler(
-		registerMsg.MiddlewareName,
-		caveatName, readOnly, stream.Recv, stream.Send,
-		r.cfg.RPCMiddleware.InterceptTimeout,
-		r.cfg.ActiveNetParams.Params, r.quit,
-	)
-
-	// Add the RPC middleware to the interceptor chain and defer its
-	// removal.
-	if err := r.interceptorChain.RegisterMiddleware(middleware); err != nil {
-		return fmt.Errorf("error registering middleware: %v", err)
-	}
-	defer r.interceptorChain.RemoveMiddleware(registerMsg.MiddlewareName)
-
-	// Send a message to the client to indicate that the registration has
-	// successfully completed.
-	regCompleteMsg := &lnrpc.RPCMiddlewareRequest{
-		InterceptType: &lnrpc.RPCMiddlewareRequest_RegComplete{
-			RegComplete: true,
-		},
-	}
-
-	// Send the message in a goroutine because the Send method blocks until
-	// the message is read by the client.
-	go func() {
-		err := stream.Send(regCompleteMsg)
-		if err != nil {
-			errChan <- err
-			return
-		}
-
-		close(registerDoneChan)
-	}()
-
-	select {
-	case err := <-errChan:
-		return fmt.Errorf("error sending middleware registration "+
-			"complete message: %v", err)
-
-	case <-ctxc.Done():
-		return ctxc.Err()
-
-	case <-r.quit:
-		return ErrServerShuttingDown
-
-	case <-registerDoneChan:
-	}
-
-	return middleware.Run()
 }
