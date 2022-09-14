@@ -19,11 +19,6 @@ const _ = grpc.SupportPackageIsVersion7
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WalletKitClient interface {
 	//
-	//ListAccounts retrieves all accounts belonging to the wallet by default. A
-	//name and key scope filter can be provided to filter through all of the
-	//wallet accounts and return only those matching.
-	ListAccounts(ctx context.Context, in *ListAccountsRequest, opts ...grpc.CallOption) (*ListAccountsResponse, error)
-	//
 	//SignPsbt expects a partial transaction with all inputs and outputs fully
 	//declared and tries to sign all unsigned inputs that have all required fields
 	//(UTXO information, BIP32 derivation information, witness or sig scripts)
@@ -46,15 +41,6 @@ func NewWalletKitClient(cc grpc.ClientConnInterface) WalletKitClient {
 	return &walletKitClient{cc}
 }
 
-func (c *walletKitClient) ListAccounts(ctx context.Context, in *ListAccountsRequest, opts ...grpc.CallOption) (*ListAccountsResponse, error) {
-	out := new(ListAccountsResponse)
-	err := c.cc.Invoke(ctx, "/proto.WalletKit/ListAccounts", in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *walletKitClient) SignPsbt(ctx context.Context, in *SignPsbtRequest, opts ...grpc.CallOption) (*SignPsbtResponse, error) {
 	out := new(SignPsbtResponse)
 	err := c.cc.Invoke(ctx, "/proto.WalletKit/SignPsbt", in, out, opts...)
@@ -68,11 +54,6 @@ func (c *walletKitClient) SignPsbt(ctx context.Context, in *SignPsbtRequest, opt
 // All implementations must embed UnimplementedWalletKitServer
 // for forward compatibility
 type WalletKitServer interface {
-	//
-	//ListAccounts retrieves all accounts belonging to the wallet by default. A
-	//name and key scope filter can be provided to filter through all of the
-	//wallet accounts and return only those matching.
-	ListAccounts(context.Context, *ListAccountsRequest) (*ListAccountsResponse, error)
 	//
 	//SignPsbt expects a partial transaction with all inputs and outputs fully
 	//declared and tries to sign all unsigned inputs that have all required fields
@@ -93,9 +74,6 @@ type WalletKitServer interface {
 type UnimplementedWalletKitServer struct {
 }
 
-func (UnimplementedWalletKitServer) ListAccounts(context.Context, *ListAccountsRequest) (*ListAccountsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListAccounts not implemented")
-}
 func (UnimplementedWalletKitServer) SignPsbt(context.Context, *SignPsbtRequest) (*SignPsbtResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SignPsbt not implemented")
 }
@@ -110,24 +88,6 @@ type UnsafeWalletKitServer interface {
 
 func RegisterWalletKitServer(s grpc.ServiceRegistrar, srv WalletKitServer) {
 	s.RegisterService(&WalletKit_ServiceDesc, srv)
-}
-
-func _WalletKit_ListAccounts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListAccountsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WalletKitServer).ListAccounts(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: "/proto.WalletKit/ListAccounts",
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WalletKitServer).ListAccounts(ctx, req.(*ListAccountsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _WalletKit_SignPsbt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -155,10 +115,6 @@ var WalletKit_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "proto.WalletKit",
 	HandlerType: (*WalletKitServer)(nil),
 	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "ListAccounts",
-			Handler:    _WalletKit_ListAccounts_Handler,
-		},
 		{
 			MethodName: "SignPsbt",
 			Handler:    _WalletKit_SignPsbt_Handler,
