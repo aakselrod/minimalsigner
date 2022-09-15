@@ -7,8 +7,6 @@ import (
 
 	"github.com/aakselrod/minimalsigner/proto"
 	"github.com/btcsuite/btcd/btcutil/psbt"
-	"github.com/btcsuite/btcwallet/waddrmgr"
-	"github.com/lightningnetwork/lnd/keychain"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 )
 
@@ -35,14 +33,6 @@ type walletKit struct {
 // A compile time check to ensure that walletKit fully implements the
 // proto.WalletKitServer gRPC service.
 var _ proto.WalletKitServer = (*walletKit)(nil)
-
-// internalScope returns the internal key scope.
-func (w *walletKit) internalScope() waddrmgr.KeyScope {
-	return waddrmgr.KeyScope{
-		Purpose: keychain.BIP0043Purpose,
-		Coin:    w.server.cfg.ActiveNetParams.HDCoinType,
-	}
-}
 
 // SignPsbt expects a partial transaction with all inputs and outputs fully
 // declared and tries to sign all unsigned inputs that have all required fields
