@@ -31,7 +31,7 @@ type KeyRing struct {
 }
 
 // NewKeyRing returns an in-memory key ring.
-// TODO(aakselrod): zero seed bytes
+// TODO(aakselrod): zero seed bytes (?) and unneeded keys.
 func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 	rootKey, err := hdkeychain.NewMaster(seed, net)
 	if err != nil {

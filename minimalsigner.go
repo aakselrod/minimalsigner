@@ -10,7 +10,9 @@ import (
 	"net"
 	_ "net/http/pprof" // nolint:gosec // used to set up profiling HTTP handlers.
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/lightningnetwork/lnd/cert"
@@ -187,9 +189,14 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 		return mkErr("unable to add deps to RPC server: %v", err)
 	}
 
-	// Wait for shutdown signal from either a graceful server stop or from
-	// the interrupt handler.
-	//<-interceptor.ShutdownChannel()
+	// Wait for shutdown signal from the interrupt handler.
+	signerLog.Infof("Press ctrl-c to exit")
+
+	sigint := make(chan os.Signal, 1)
+	signal.Notify(sigint, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+
+	<-sigint
+
 	return nil
 }
 
