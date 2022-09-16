@@ -110,6 +110,12 @@ type Config struct {
 
 	// ActiveNetParams contains parameters of the target chain.
 	ActiveNetParams chaincfg.Params
+
+	// seed contains the 32-byte wallet seed.
+	seed [32]byte
+
+	// macRootKey contains the 32-byte macaroon root key.
+	macRootKey [32]byte
 }
 
 // DefaultConfig returns all default values for the Config struct.
@@ -402,6 +408,17 @@ func ValidateConfig(cfg Config, fileParser, flagParser *flags.Parser) (
 		return nil, mkErr("error normalizing RPC listen addrs: %v", err)
 	}
 
+	// Get the seed from the environment.
+	cfg.seed, err = get32BytesFromEnv("SIGNER_SEED")
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.macRootKey, err = get32BytesFromEnv("SIGNER_MAC_ROOT_KEY")
+	if err != nil {
+		return nil, err
+	}
+
 	// All good, return the sanitized result.
 	return &cfg, nil
 }
@@ -430,4 +447,28 @@ func CleanAndExpandPath(path string) string {
 	// NOTE: The os.ExpandEnv doesn't work with Windows-style %VARIABLE%,
 	// but the variables can still be expanded via POSIX-style $VARIABLE.
 	return filepath.Clean(os.ExpandEnv(path))
+}
+
+// get32BytesFromEnv gets a 64-byte hex string, encoding a 32-byte value, from
+// an environment variable.
+func get32BytesFromEnv(envKey string) ([32]byte, error) {
+	strHex, ok := os.LookupEnv(envKey)
+	if !ok {
+		return [32]byte{}, fmt.Errorf("env var %s not found: ", envKey)
+	}
+
+	keyBytes, err := hex.DecodeString(strHex)
+	if err != nil {
+		return [32]byte{}, err
+	}
+
+	if len(keyBytes) != 32 {
+		return [32]byte{}, fmt.Errorf("key length %d instead of 32",
+			len(keyBytes))
+	}
+
+	var key [32]byte
+	copy(key[:], keyBytes)
+
+	return key, nil
 }

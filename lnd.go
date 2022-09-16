@@ -147,7 +147,7 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 		return mkErr("error starting gRPC listener: %v", err)
 	}
 
-	keyRing, err := NewKeyRing(make([]byte, 32), &cfg.ActiveNetParams)
+	keyRing, err := NewKeyRing(cfg.seed[:], &cfg.ActiveNetParams)
 	if err != nil {
 		return mkErr("error creating keyring: %v", err)
 	}
