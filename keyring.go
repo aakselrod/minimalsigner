@@ -108,7 +108,7 @@ func (k *KeyRing) DeriveKey(keyLoc keychain.KeyLocator) (
 
 	privKey, err := k.DerivePrivKey(keyDesc)
 	if err != nil {
-		return keychain.KeyDescriptor{}, nil
+		return keychain.KeyDescriptor{}, err
 	}
 
 	keyDesc.PubKey = privKey.PubKey()
@@ -126,12 +126,26 @@ func (k *KeyRing) DerivePrivKey(keyDesc keychain.KeyDescriptor) (
 
 	key, ok := k.accts[path]
 	if !ok {
-		return nil, errors.New("DeriveKey failed: account not found")
+		return nil, errors.New("DerivePrivKey failed: account not found")
 	}
 
 	privKey, err := key.DeriveNonStandard(keyDesc.Index)
 	if err != nil {
 		return nil, err
+	}
+
+	// If we're looking for a specific pubkey, make sure the derived
+	// pubkey matches it. Otherwise, the user is looking for us to scan
+	// and we don't do that here.
+	if keyDesc.PubKey != nil {
+		pubKey, err := privKey.ECPubKey()
+		if err != nil {
+			return nil, err
+		}
+
+		if !keyDesc.PubKey.IsEqual(pubKey) {
+			return nil, errors.New("DerivePrivKey failed: unsupported scan requested")
+		}
 	}
 
 	return privKey.ECPrivKey()
