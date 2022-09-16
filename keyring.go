@@ -15,16 +15,19 @@ import (
 	"github.com/lightningnetwork/lnd/keychain"
 )
 
-const (
-	hks = hdkeychain.HardenedKeyStart
+// maxAccts is the number of accounts/key families to create on initialization.
+const maxAcctID = 16
 
-	hdp = keychain.BIP0043Purpose
-)
+type acct struct {
+	xPub     *hdkeychain.ExtendedKey
+	extXPriv *hdkeychain.ExtendedKey
+}
 
 // KeyRing is an implementation of the keychain.SecretKeyRing backed by
 // in-memory keys.
 type KeyRing struct {
-	accts map[string]*hdkeychain.ExtendedKey
+	coin  string
+	accts map[keychain.KeyFamily]acct
 }
 
 // NewKeyRing returns an in-memory key ring.
@@ -36,48 +39,60 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 	}
 
 	k := KeyRing{
-		accts: make(map[string]*hdkeychain.ExtendedKey),
+		coin:  strconv.FormatUint(uint64(net.HDCoinType), 10),
+		accts: make(map[keychain.KeyFamily]acct),
 	}
 
-	deriveAcct := func(act uint32) (*hdkeychain.ExtendedKey, string,
-		error) {
+	deriveAcct := func(act uint32) error {
 
 		// Derive purpose.
-		subKey, err := rootKey.DeriveNonStandard(hdp + hks)
+		subKey, err := rootKey.DeriveNonStandard(
+			keychain.BIP0043Purpose + hdkeychain.HardenedKeyStart,
+		)
 		if err != nil {
-			return nil, "", err
+			return err
 		}
 
 		// Derive coin.
-		subKey, err = subKey.DeriveNonStandard(net.HDCoinType + hks)
+		subKey, err = subKey.DeriveNonStandard(
+			net.HDCoinType + hdkeychain.HardenedKeyStart,
+		)
 		if err != nil {
-			return nil, "", err
+			return err
 		}
 
 		// Derive family/account.
-		strAct := strconv.FormatUint(uint64(act), 10)
-		subKey, err = subKey.DeriveNonStandard(act + hks)
+		subKey, err = subKey.DeriveNonStandard(
+			act + hdkeychain.HardenedKeyStart,
+		)
 		if err != nil {
-			return nil, "", err
+			return err
 		}
 
-		// Derive external branch only
-		key, err := subKey.DeriveNonStandard(0)
+		// Get account watch-only pubkey.
+		var account acct
+
+		account.xPub, err = subKey.Neuter()
 		if err != nil {
-			return nil, "", err
+			return err
 		}
 
-		return key, "/" + strAct + "'", nil
+		// Derive external branch only for faster derivation by index.
+		account.extXPriv, err = subKey.DeriveNonStandard(0)
+		if err != nil {
+			return err
+		}
+
+		k.accts[keychain.KeyFamily(act)] = account
+
+		return nil
 	}
 
 	// Populate Lightning-related families/accounts.
-	for i := uint32(0); i <= 255; i++ {
-		key, path, err := deriveAcct(i)
-		if err != nil {
+	for i := uint32(0); i <= maxAcctID; i++ {
+		if err := deriveAcct(i); err != nil {
 			return nil, err
 		}
-
-		k.accts[path] = key
 	}
 
 	return &k, nil
@@ -122,14 +137,12 @@ func (k *KeyRing) DeriveKey(keyLoc keychain.KeyLocator) (
 func (k *KeyRing) DerivePrivKey(keyDesc keychain.KeyDescriptor) (
 	*btcec.PrivateKey, error) {
 
-	path := "/" + strconv.FormatUint(uint64(keyDesc.Family), 10) + "'"
-
-	key, ok := k.accts[path]
+	key, ok := k.accts[keyDesc.Family]
 	if !ok {
 		return nil, errors.New("DerivePrivKey failed: account not found")
 	}
 
-	privKey, err := key.DeriveNonStandard(keyDesc.Index)
+	privKey, err := key.extXPriv.DeriveNonStandard(keyDesc.Index)
 	if err != nil {
 		return nil, err
 	}
@@ -252,4 +265,51 @@ func (k *KeyRing) SignMessageSchnorr(keyLoc keychain.KeyLocator, msg []byte,
 		digest = chainhash.HashB(msg)
 	}
 	return schnorr.Sign(privKey, digest)
+}
+
+func (k *KeyRing) ListAccounts() []byte {
+	acctList := "{\n    \"accounts\": [\n"
+
+	for act := uint32(0); act <= maxAcctID; act++ {
+		account := k.accts[keychain.KeyFamily(act)]
+
+		strAct := strconv.FormatUint(uint64(act), 10)
+
+		acctList += "        {\n"
+
+		acctList += "            \"name\": \""
+		if act == 0 {
+			acctList += "default"
+		} else {
+			acctList += "act:" + strAct
+		}
+		acctList += "\",\n"
+
+		acctList += "            \"address_type\": \"WITNESS_PUBKEY_HASH\",\n"
+
+		acctList += "            \"extended_public_key\": \"" +
+			account.xPub.String() + "\",\n"
+
+		acctList += "            \"master_key_fingerprint\": null,\n"
+
+		acctList += "            \"derivation_path\": \"m/1017'/" +
+			k.coin + "'/" + strAct + "'\",\n"
+
+		acctList += "            \"external_key_count\": 0,\n"
+
+		acctList += "            \"internal_key_count\": 0,\n"
+
+		acctList += "            \"watch_only\": false\n"
+
+		acctList += "        }"
+
+		if act < maxAcctID {
+			acctList += ","
+		}
+		acctList += "\n"
+	}
+
+	acctList += "    ]\n}"
+
+	return []byte(acctList)
 }

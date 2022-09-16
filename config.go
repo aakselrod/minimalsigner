@@ -73,7 +73,7 @@ var (
 // See LoadConfig for further details regarding the configuration
 // loading+parsing process.
 type Config struct {
-	SignerDir  string `long:"lnddir" description:"The base directory that contains signer's data, logs, configuration file, etc."`
+	SignerDir  string `long:"signerdir" description:"The base directory that contains signer's data, logs, configuration file, etc."`
 	ConfigFile string `short:"C" long:"configfile" description:"Path to configuration file"`
 
 	TLSCertPath        string        `long:"tlscertpath" description:"Path to write the TLS certificate for lnd's RPC services"`
@@ -414,10 +414,15 @@ func ValidateConfig(cfg Config, fileParser, flagParser *flags.Parser) (
 		return nil, err
 	}
 
+	cfg.OutputAccounts = CleanAndExpandPath(cfg.OutputAccounts)
+
+	// Get the macaroon root key from the environment.
 	cfg.macRootKey, err = get32BytesFromEnv("SIGNER_MAC_ROOT_KEY")
 	if err != nil {
 		return nil, err
 	}
+
+	cfg.OutputMacaroon = CleanAndExpandPath(cfg.OutputMacaroon)
 
 	// All good, return the sanitized result.
 	return &cfg, nil

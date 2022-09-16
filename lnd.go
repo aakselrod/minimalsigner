@@ -23,8 +23,8 @@ import (
 )
 
 const (
-	// signerMacaroonFilePermissions is the file permission that is used for
-	// creating the signer macaroon file.
+	// outputFilePermissions is the file permission that is used for
+	// creating the signer macaroon file and the accounts list file.
 	//
 	// Why 640 is safe:
 	// Assuming a reasonably secure Linux system, it will have a
@@ -35,7 +35,7 @@ const (
 	// Since there is no other user in the group, no other user can read
 	// admin macaroon unless the administrator explicitly allowed it. Thus
 	// there's no harm allowing group read.
-	signerMacaroonFilePermissions = 0640
+	outputFilePermissions = 0640
 )
 
 // ListenerWithSignal is a net.Listener that has an additional Ready channel
@@ -150,6 +150,18 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 	keyRing, err := NewKeyRing(cfg.seed[:], &cfg.ActiveNetParams)
 	if err != nil {
 		return mkErr("error creating keyring: %v", err)
+	}
+
+	// If we're asked to output a watch-only account list, do it here.
+	if cfg.OutputAccounts != "" {
+		err = os.WriteFile(
+			cfg.OutputAccounts,
+			keyRing.ListAccounts(),
+			outputFilePermissions,
+		)
+		if err != nil {
+			return mkErr("error writing account list: %v", err)
+		}
 	}
 
 	idKeyDesc, err := keyRing.DeriveKey(
