@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bottlepay/lnmux"
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lncfg"
@@ -148,7 +147,10 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 		return mkErr("error starting gRPC listener: %v", err)
 	}
 
-	keyRing := lnmux.NewKeyRing([32]byte{})
+	keyRing, err := NewKeyRing(make([]byte, 32), &cfg.ActiveNetParams)
+	if err != nil {
+		return mkErr("error creating keyring: %v", err)
+	}
 
 	idKeyDesc, err := keyRing.DeriveKey(
 		keychain.KeyLocator{
@@ -162,7 +164,7 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 
 	// Set up the core server which will listen for incoming peer
 	// connections.
-	server := newServer(cfg, &KeyRing{*keyRing}, &idKeyDesc)
+	server := newServer(cfg, keyRing, &idKeyDesc)
 
 	// Now we have created all dependencies necessary to populate and
 	// start the RPC server.
