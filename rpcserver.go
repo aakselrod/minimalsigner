@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/aakselrod/minimalsigner/proto"
-	"github.com/lightningnetwork/lnd/macaroons"
 	"github.com/tv42/zbase32"
 	"google.golang.org/grpc"
 	"gopkg.in/macaroon-bakery.v2/bakery"
@@ -125,7 +124,7 @@ func newRPCServer(cfg *Config) *rpcServer {
 // addDeps populates all dependencies needed by the RPC server, and any
 // of the sub-servers that it maintains. When this is done, the RPC server can
 // be started, and start accepting RPC calls.
-func (r *rpcServer) addDeps(s *server, macService *macaroons.Service) error {
+func (r *rpcServer) addDeps(s *server, checker *bakery.Checker) error {
 	// Next, we need to merge the set of sub server macaroon permissions
 	// with the main RPC server permissions so we can unite them under a
 	// single set of interceptors.

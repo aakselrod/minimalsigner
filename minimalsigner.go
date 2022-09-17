@@ -18,7 +18,6 @@ import (
 	"github.com/lightningnetwork/lnd/cert"
 	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lncfg"
-	"github.com/lightningnetwork/lnd/macaroons"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"gopkg.in/macaroon-bakery.v2/bakery"
@@ -180,11 +179,21 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 	// connections.
 	server := newServer(cfg, keyRing, &idKeyDesc)
 
+	// Create a new macaroom service.
+	rootKeyStore := &assignedRootKeyStore{
+		key: cfg.macRootKey[:],
+	}
+
+	bakeryParams := bakery.BakeryParams{
+		RootKeyStore: rootKeyStore,
+		Location:     "lnd",
+	}
+
+	bkry := bakery.New(bakeryParams)
+
 	// Now we have created all dependencies necessary to populate and
 	// start the RPC server.
-	err = rpcServer.addDeps(
-		server, nil,
-	)
+	err = rpcServer.addDeps(server, bkry.Checker)
 	if err != nil {
 		return mkErr("unable to add deps to RPC server: %v", err)
 	}
@@ -296,11 +305,11 @@ func fileExists(name string) bool {
 
 // bakeMacaroon creates a new macaroon with newest version and the given
 // permissions then returns it binary serialized.
-func bakeMacaroon(ctx context.Context, svc *macaroons.Service,
+func bakeMacaroon(ctx context.Context, oven *bakery.Oven,
 	permissions []bakery.Op) ([]byte, error) {
 
-	mac, err := svc.NewMacaroon(
-		ctx, macaroons.DefaultRootKeyID, permissions...,
+	mac, err := oven.NewMacaroon(
+		ctx, bakery.LatestVersion, nil, permissions...,
 	)
 	if err != nil {
 		return nil, err
