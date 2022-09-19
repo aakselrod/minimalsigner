@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	_ "net/http/pprof" // nolint:gosec // used to set up profiling HTTP handlers.
 	"os"
 	"os/signal"
 	"sync"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"github.com/lightningnetwork/lnd/cert"
-	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lncfg"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -165,19 +163,9 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 		}
 	}
 
-	idKeyDesc, err := keyRing.DeriveKey(
-		keychain.KeyLocator{
-			Family: keychain.KeyFamilyNodeKey,
-			Index:  0,
-		},
-	)
-	if err != nil {
-		return mkErr("error deriving node key: %v", err)
-	}
-
 	// Set up the core server which will listen for incoming peer
 	// connections.
-	server := newServer(cfg, keyRing, &idKeyDesc)
+	server := newServer(keyRing)
 
 	// Create a new macaroon service.
 	rootKeyStore := &assignedRootKeyStore{

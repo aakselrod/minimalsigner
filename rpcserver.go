@@ -197,8 +197,13 @@ func (r *rpcServer) SignMessage(_ context.Context,
 	}
 
 	in.Msg = append(signedMsgPrefix, in.Msg...)
-	sigBytes, err := r.server.nodeSigner.SignMessageCompact(
-		in.Msg, !in.SingleHash,
+	keyLoc := KeyLocator{
+		Family: 6,
+		Index:  0,
+	}
+
+	sigBytes, err := r.server.keyRing.SignMessageCompact(
+		keyLoc, in.Msg, !in.SingleHash,
 	)
 	if err != nil {
 		return nil, err

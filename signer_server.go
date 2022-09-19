@@ -7,7 +7,6 @@ import (
 	"github.com/aakselrod/minimalsigner/proto"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
-	"github.com/lightningnetwork/lnd/keychain"
 	"github.com/lightningnetwork/lnd/lnwire"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 )
@@ -58,8 +57,8 @@ func (s *signerServer) SignMessage(_ context.Context,
 	}
 
 	// Describe the private key we'll be using for signing.
-	keyLocator := keychain.KeyLocator{
-		Family: keychain.KeyFamily(in.KeyLoc.KeyFamily),
+	keyLocator := KeyLocator{
+		Family: uint32(in.KeyLoc.KeyFamily),
 		Index:  uint32(in.KeyLoc.KeyIndex),
 	}
 
@@ -164,7 +163,7 @@ func (s *signerServer) DeriveSharedKey(_ context.Context,
 	// key.
 	if keyLoc == nil {
 		keyLoc = &proto.KeyLocator{
-			KeyFamily: int32(keychain.KeyFamilyNodeKey),
+			KeyFamily: int32(nodeKeyAcct),
 			KeyIndex:  0,
 		}
 	}
@@ -186,9 +185,9 @@ func (s *signerServer) DeriveSharedKey(_ context.Context,
 	// Create a key descriptor. When the KeyIndex is not specified, it uses
 	// the empty value 0, and when the raw public key is not specified, the
 	// pk is nil.
-	keyDescriptor := keychain.KeyDescriptor{
-		KeyLocator: keychain.KeyLocator{
-			Family: keychain.KeyFamily(keyLoc.KeyFamily),
+	keyDescriptor := KeyDescriptor{
+		KeyLocator: KeyLocator{
+			Family: uint32(keyLoc.KeyFamily),
 			Index:  uint32(keyLoc.KeyIndex),
 		},
 		PubKey: pk,

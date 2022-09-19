@@ -12,11 +12,31 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
-	"github.com/lightningnetwork/lnd/keychain"
 )
 
 // maxAccts is the number of accounts/key families to create on initialization.
-const maxAcctID = 16
+const (
+	maxAcctID      = 16
+	nodeKeyAcct    = 6
+	bip0043purpose = 1017
+)
+
+type KeyLocator struct {
+	// Family is the family of key being identified.
+	Family uint32
+
+	// Index is the precise index of the key being identified.
+	Index uint32
+}
+
+type KeyDescriptor struct {
+	// KeyLocator is the internal KeyLocator of the descriptor.
+	KeyLocator
+
+	// PubKey is an optional public key that fully describes a target key.
+	// If this is nil, the KeyLocator MUST NOT be empty.
+	PubKey *btcec.PublicKey
+}
 
 type acct struct {
 	xPub     *hdkeychain.ExtendedKey
@@ -27,7 +47,7 @@ type acct struct {
 // in-memory keys.
 type KeyRing struct {
 	coin  string
-	accts map[keychain.KeyFamily]acct
+	accts map[uint32]acct
 }
 
 // NewKeyRing returns an in-memory key ring.
@@ -40,7 +60,7 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 
 	// Derive purpose.
 	rootKey, err = rootKey.DeriveNonStandard(
-		keychain.BIP0043Purpose + hdkeychain.HardenedKeyStart,
+		bip0043purpose + hdkeychain.HardenedKeyStart,
 	)
 	if err != nil {
 		return nil, err
@@ -56,7 +76,7 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 
 	k := KeyRing{
 		coin:  strconv.FormatUint(uint64(net.HDCoinType), 10),
-		accts: make(map[keychain.KeyFamily]acct),
+		accts: make(map[uint32]acct),
 	}
 
 	deriveAcct := func(act uint32) error {
@@ -83,7 +103,7 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 			return err
 		}
 
-		k.accts[keychain.KeyFamily(act)] = account
+		k.accts[act] = account
 
 		return nil
 	}
@@ -102,11 +122,9 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 // We don't support state (yet) 'round these parts.
 //
 // NOTE: This is part of the keychain.MessageSignerRing interface.
-func (k *KeyRing) DeriveNextKey(keyFam keychain.KeyFamily) (
-	keychain.KeyDescriptor, error) {
-
+func (k *KeyRing) DeriveNextKey(keyFam uint32) (KeyDescriptor, error) {
 	// TODO(aakselrod): should this panic instead?
-	return keychain.KeyDescriptor{},
+	return KeyDescriptor{},
 		errors.New("DeriveNextKey unimplemented: requires state")
 }
 
@@ -115,15 +133,13 @@ func (k *KeyRing) DeriveNextKey(keyFam keychain.KeyFamily) (
 // rotating something like our current default node key.
 //
 // NOTE: This is part of the keychain.KeyRing interface.
-func (k *KeyRing) DeriveKey(keyLoc keychain.KeyLocator) (
-	keychain.KeyDescriptor, error) {
-
-	var keyDesc keychain.KeyDescriptor
+func (k *KeyRing) DeriveKey(keyLoc KeyLocator) (KeyDescriptor, error) {
+	var keyDesc KeyDescriptor
 	keyDesc.KeyLocator = keyLoc
 
 	privKey, err := k.DerivePrivKey(keyDesc)
 	if err != nil {
-		return keychain.KeyDescriptor{}, err
+		return KeyDescriptor{}, err
 	}
 
 	keyDesc.PubKey = privKey.PubKey()
@@ -134,8 +150,8 @@ func (k *KeyRing) DeriveKey(keyLoc keychain.KeyLocator) (
 // DerivePrivKey attempts to derive the private key that corresponds to
 // the passed key descriptor. It does not attempt to scan for a public key
 // but only uses the key locator.
-func (k *KeyRing) DerivePrivKey(keyDesc keychain.KeyDescriptor) (
-	*btcec.PrivateKey, error) {
+func (k *KeyRing) DerivePrivKey(keyDesc KeyDescriptor) (*btcec.PrivateKey,
+	error) {
 
 	key, ok := k.accts[keyDesc.Family]
 	if !ok {
@@ -173,8 +189,8 @@ func (k *KeyRing) DerivePrivKey(keyDesc keychain.KeyDescriptor) (
 //	sx := k*P s := sha256(sx.SerializeCompressed())
 //
 // NOTE: This is part of the keychain.ECDHRing interface.
-func (k *KeyRing) ECDH(keyDesc keychain.KeyDescriptor,
-	pub *btcec.PublicKey) ([32]byte, error) {
+func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
+	error) {
 
 	privKey, err := k.DerivePrivKey(keyDesc)
 	if err != nil {
@@ -199,10 +215,10 @@ func (k *KeyRing) ECDH(keyDesc keychain.KeyDescriptor,
 // first, with the private key described in the key locator.
 //
 // NOTE: This is part of the keychain.MessageSignerRing interface.
-func (k *KeyRing) SignMessage(keyLoc keychain.KeyLocator,
-	msg []byte, doubleHash bool) (*ecdsa.Signature, error) {
+func (k *KeyRing) SignMessage(keyLoc KeyLocator, msg []byte, doubleHash bool) (
+	*ecdsa.Signature, error) {
 
-	privKey, err := k.DerivePrivKey(keychain.KeyDescriptor{
+	privKey, err := k.DerivePrivKey(KeyDescriptor{
 		KeyLocator: keyLoc,
 	})
 	if err != nil {
@@ -223,10 +239,10 @@ func (k *KeyRing) SignMessage(keyLoc keychain.KeyLocator,
 // the signature in the compact, public key recoverable format.
 //
 // NOTE: This is part of the keychain.MessageSignerRing interface.
-func (k *KeyRing) SignMessageCompact(keyLoc keychain.KeyLocator, msg []byte,
+func (k *KeyRing) SignMessageCompact(keyLoc KeyLocator, msg []byte,
 	doubleHash bool) ([]byte, error) {
 
-	privKey, err := k.DerivePrivKey(keychain.KeyDescriptor{
+	privKey, err := k.DerivePrivKey(KeyDescriptor{
 		KeyLocator: keyLoc,
 	})
 	if err != nil {
@@ -245,9 +261,9 @@ func (k *KeyRing) SignMessageCompact(keyLoc keychain.KeyLocator, msg []byte,
 // SignMessageSchnorr signs the given message, single or double SHA256
 // hashing it first, with the private key described in the key locator
 // and the optional Taproot tweak applied to the private key.
-func (k *KeyRing) SignMessageSchnorr(keyLoc keychain.KeyLocator, msg []byte,
+func (k *KeyRing) SignMessageSchnorr(keyLoc KeyLocator, msg []byte,
 	doubleHash bool, taprootTweak []byte) (*schnorr.Signature, error) {
-	privKey, err := k.DerivePrivKey(keychain.KeyDescriptor{
+	privKey, err := k.DerivePrivKey(KeyDescriptor{
 		KeyLocator: keyLoc,
 	})
 	if err != nil {
@@ -271,7 +287,7 @@ func (k *KeyRing) ListAccounts() []byte {
 	acctList := "{\n    \"accounts\": [\n"
 
 	for act := uint32(0); act <= maxAcctID; act++ {
-		account := k.accts[keychain.KeyFamily(act)]
+		account := k.accts[act]
 
 		strAct := strconv.FormatUint(uint64(act), 10)
 
