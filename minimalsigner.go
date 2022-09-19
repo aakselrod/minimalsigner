@@ -179,7 +179,7 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 	// connections.
 	server := newServer(cfg, keyRing, &idKeyDesc)
 
-	// Create a new macaroom service.
+	// Create a new macaroon service.
 	rootKeyStore := &assignedRootKeyStore{
 		key: cfg.macRootKey[:],
 	}
@@ -190,6 +190,31 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 	}
 
 	bkry := bakery.New(bakeryParams)
+
+	// If we're asked to output a macaroon file, do it here.
+	if cfg.OutputMacaroon != "" {
+		mac, err := bkry.Oven.NewMacaroon(
+			ctx, bakery.LatestVersion, nil, nodePermissions...,
+		)
+		if err != nil {
+			return mkErr("error baking macaroon: %v", err)
+		}
+
+		macBytes, err := mac.M().MarshalBinary()
+		if err != nil {
+			return mkErr("error marshaling macaroon binary: %v",
+				err)
+		}
+
+		err = os.WriteFile(
+			cfg.OutputMacaroon,
+			macBytes,
+			outputFilePermissions,
+		)
+		if err != nil {
+			return mkErr("error writing account list: %v", err)
+		}
+	}
 
 	// Now we have created all dependencies necessary to populate and
 	// start the RPC server.
@@ -301,21 +326,6 @@ func fileExists(name string) bool {
 		}
 	}
 	return true
-}
-
-// bakeMacaroon creates a new macaroon with newest version and the given
-// permissions then returns it binary serialized.
-func bakeMacaroon(ctx context.Context, oven *bakery.Oven,
-	permissions []bakery.Op) ([]byte, error) {
-
-	mac, err := oven.NewMacaroon(
-		ctx, bakery.LatestVersion, nil, permissions...,
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return mac.M().MarshalBinary()
 }
 
 // startGrpcListen starts the GRPC server on the passed listeners.
