@@ -38,6 +38,22 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 		return nil, err
 	}
 
+	// Derive purpose.
+	rootKey, err = rootKey.DeriveNonStandard(
+		keychain.BIP0043Purpose + hdkeychain.HardenedKeyStart,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Derive coin.
+	rootKey, err = rootKey.DeriveNonStandard(
+		net.HDCoinType + hdkeychain.HardenedKeyStart,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	k := KeyRing{
 		coin:  strconv.FormatUint(uint64(net.HDCoinType), 10),
 		accts: make(map[keychain.KeyFamily]acct),
@@ -45,24 +61,8 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 
 	deriveAcct := func(act uint32) error {
 
-		// Derive purpose.
-		subKey, err := rootKey.DeriveNonStandard(
-			keychain.BIP0043Purpose + hdkeychain.HardenedKeyStart,
-		)
-		if err != nil {
-			return err
-		}
-
-		// Derive coin.
-		subKey, err = subKey.DeriveNonStandard(
-			net.HDCoinType + hdkeychain.HardenedKeyStart,
-		)
-		if err != nil {
-			return err
-		}
-
 		// Derive family/account.
-		subKey, err = subKey.DeriveNonStandard(
+		subKey, err := rootKey.DeriveNonStandard(
 			act + hdkeychain.HardenedKeyStart,
 		)
 		if err != nil {
