@@ -73,10 +73,10 @@ func (w *walletKit) SignPsbt(_ context.Context, req *proto.SignPsbtRequest) (
 	// Let the wallet do the heavy lifting. This will sign all inputs that
 	// we have the UTXO for. If some inputs can't be signed and don't have
 	// witness data attached, they will just be skipped.
-	/*signedInputs, err := w.server.keyRing.SignPsbt(packet)
+	signedInputs, err := w.server.keyRing.SignPsbt(packet)
 	if err != nil {
 		return nil, fmt.Errorf("error signing PSBT: %v", err)
-	}*/
+	}
 
 	// Serialize the signed PSBT in both the packet and wire format.
 	var signedPsbtBytes bytes.Buffer
@@ -86,7 +86,7 @@ func (w *walletKit) SignPsbt(_ context.Context, req *proto.SignPsbtRequest) (
 	}
 
 	return &proto.SignPsbtResponse{
-		SignedPsbt: signedPsbtBytes.Bytes(),
-		//SignedInputs: signedInputs,
+		SignedPsbt:   signedPsbtBytes.Bytes(),
+		SignedInputs: signedInputs,
 	}, nil
 }
