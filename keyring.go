@@ -15,7 +15,6 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-	"github.com/lightningnetwork/lnd/input"
 )
 
 // maxAccts is the number of accounts/key families to create on initialization.
@@ -23,6 +22,31 @@ const (
 	maxAcctID      = 16
 	nodeKeyAcct    = 6
 	bip0043purpose = 1017
+)
+
+// SignMethod defines the different ways a signer can sign, given a specific
+// input.
+type SignMethod uint8
+
+const (
+	// WitnessV0SignMethod denotes that a SegWit v0 (p2wkh, np2wkh, p2wsh)
+	// input script should be signed.
+	WitnessV0SignMethod SignMethod = 0
+
+	// TaprootKeySpendBIP0086SignMethod denotes that a SegWit v1 (p2tr)
+	// input should be signed by using the BIP0086 method (commit to
+	// internal key only).
+	TaprootKeySpendBIP0086SignMethod SignMethod = 1
+
+	// TaprootKeySpendSignMethod denotes that a SegWit v1 (p2tr)
+	// input should be signed by using a given taproot hash to commit to in
+	// addition to the internal key.
+	TaprootKeySpendSignMethod SignMethod = 2
+
+	// TaprootScriptSpendSignMethod denotes that a SegWit v1 (p2tr) input
+	// should be spent using the script path and that a specific leaf script
+	// should be signed for.
+	TaprootScriptSpendSignMethod SignMethod = 3
 )
 
 var (
@@ -369,25 +393,25 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 
 		switch signMethod {
 		// For p2wkh, np2wkh and p2wsh.
-		case input.WitnessV0SignMethod:
+		case WitnessV0SignMethod:
 			err = signSegWitV0(in, tx, sigHashes, idx, privKey)
 
 		// For p2tr BIP0086 key spend only.
-		case input.TaprootKeySpendBIP0086SignMethod:
+		case TaprootKeySpendBIP0086SignMethod:
 			rootHash := make([]byte, 0)
 			err = signSegWitV1KeySpend(
 				in, tx, sigHashes, idx, privKey, rootHash,
 			)
 
 		// For p2tr with script commitment key spend path.
-		case input.TaprootKeySpendSignMethod:
+		case TaprootKeySpendSignMethod:
 			rootHash := in.TaprootMerkleRoot
 			err = signSegWitV1KeySpend(
 				in, tx, sigHashes, idx, privKey, rootHash,
 			)
 
 		// For p2tr script spend path.
-		case input.TaprootScriptSpendSignMethod:
+		case TaprootScriptSpendSignMethod:
 			leafScript := in.TaprootLeafScript[0]
 			leaf := txscript.TapLeaf{
 				LeafVersion: leafScript.LeafVersion,
@@ -590,14 +614,14 @@ func maybeTweakPrivKeyPsbt(unknowns []*psbt.Unknown,
 	// spec).
 	for _, u := range unknowns {
 		if bytes.Equal(u.Key, PsbtKeyTypeInputSignatureTweakSingle) {
-			return input.TweakPrivKey(privKey, u.Value)
+			return TweakPrivKey(privKey, u.Value)
 		}
 
 		if bytes.Equal(u.Key, PsbtKeyTypeInputSignatureTweakDouble) {
 			doubleTweakKey, _ := btcec.PrivKeyFromBytes(
 				u.Value,
 			)
-			return input.DeriveRevocationPrivKey(
+			return DeriveRevocationPrivKey(
 				privKey, doubleTweakKey,
 			)
 		}
@@ -606,10 +630,93 @@ func maybeTweakPrivKeyPsbt(unknowns []*psbt.Unknown,
 	return privKey
 }
 
+// TweakPrivKey tweaks the private key of a public base point given a per
+// commitment point. The per commitment secret is the revealed revocation
+// secret for the commitment state in question. This private key will only need
+// to be generated in the case that a channel counter party broadcasts a
+// revoked state. Precisely, the following operation is used to derive a
+// tweaked private key:
+//
+//   - tweakPriv := basePriv + sha256(commitment || basePub) mod N
+//
+// Where N is the order of the sub-group.
+func TweakPrivKey(basePriv *btcec.PrivateKey,
+	commitTweak []byte) *btcec.PrivateKey {
+
+	// tweakInt := sha256(commitPoint || basePub)
+	tweakScalar := new(btcec.ModNScalar)
+	tweakScalar.SetByteSlice(commitTweak)
+
+	tweakScalar.Add(&basePriv.Key)
+
+	return &btcec.PrivateKey{Key: *tweakScalar}
+}
+
+// SingleTweakBytes computes set of bytes we call the single tweak. The purpose
+// of the single tweak is to randomize all regular delay and payment base
+// points. To do this, we generate a hash that binds the commitment point to
+// the pay/delay base point. The end end results is that the basePoint is
+// tweaked as follows:
+//
+//   - key = basePoint + sha256(commitPoint || basePoint)*G
+func SingleTweakBytes(commitPoint, basePoint *btcec.PublicKey) []byte {
+	h := sha256.New()
+	h.Write(commitPoint.SerializeCompressed())
+	h.Write(basePoint.SerializeCompressed())
+	return h.Sum(nil)
+}
+
+// TweakPubKey tweaks a public base point given a per commitment point. The per
+// DeriveRevocationPrivKey derives the revocation private key given a node's
+// commitment private key, and the preimage to a previously seen revocation
+// hash. Using this derived private key, a node is able to claim the output
+// within the commitment transaction of a node in the case that they broadcast
+// a previously revoked commitment transaction.
+//
+// The private key is derived as follows:
+//
+//	revokePriv := (revokeBasePriv * sha256(revocationBase || commitPoint)) +
+//	              (commitSecret * sha256(commitPoint || revocationBase)) mod N
+//
+// Where N is the order of the sub-group.
+func DeriveRevocationPrivKey(revokeBasePriv *btcec.PrivateKey,
+	commitSecret *btcec.PrivateKey) *btcec.PrivateKey {
+
+	// r = sha256(revokeBasePub || commitPoint)
+	revokeTweakBytes := SingleTweakBytes(
+		revokeBasePriv.PubKey(), commitSecret.PubKey(),
+	)
+	revokeTweakScalar := new(btcec.ModNScalar)
+	revokeTweakScalar.SetByteSlice(revokeTweakBytes)
+
+	// c = sha256(commitPoint || revokeBasePub)
+	commitTweakBytes := SingleTweakBytes(
+		commitSecret.PubKey(), revokeBasePriv.PubKey(),
+	)
+	commitTweakScalar := new(btcec.ModNScalar)
+	commitTweakScalar.SetByteSlice(commitTweakBytes)
+
+	// Finally to derive the revocation secret key we'll perform the
+	// following operation:
+	//
+	//  k = (revocationPriv * r) + (commitSecret * c) mod N
+	//
+	// This works since:
+	//  P = (G*a)*b + (G*c)*d
+	//  P = G*(a*b) + G*(c*d)
+	//  P = G*(a*b + c*d)
+	revokeHalfPriv := revokeTweakScalar.Mul(&revokeBasePriv.Key)
+	commitHalfPriv := commitTweakScalar.Mul(&commitSecret.Key)
+
+	revocationPriv := revokeHalfPriv.Add(commitHalfPriv)
+
+	return &btcec.PrivateKey{Key: *revocationPriv}
+}
+
 // validateSigningMethod attempts to detect the signing method that is required
 // to sign for the given PSBT input and makes sure all information is available
 // to do so.
-func validateSigningMethod(in *psbt.PInput) (input.SignMethod, error) {
+func validateSigningMethod(in *psbt.PInput) (SignMethod, error) {
 	script, err := txscript.ParsePkScript(in.WitnessUtxo.PkScript)
 	if err != nil {
 		return 0, fmt.Errorf("error detecting signing method, "+
@@ -620,7 +727,7 @@ func validateSigningMethod(in *psbt.PInput) (input.SignMethod, error) {
 	case txscript.WitnessV0PubKeyHashTy, txscript.ScriptHashTy,
 		txscript.WitnessV0ScriptHashTy:
 
-		return input.WitnessV0SignMethod, nil
+		return WitnessV0SignMethod, nil
 
 	case txscript.WitnessV1TaprootTy:
 		if len(in.TaprootBip32Derivation) == 0 {
@@ -643,7 +750,7 @@ func validateSigningMethod(in *psbt.PInput) (input.SignMethod, error) {
 		case len(derivation.LeafHashes) == 0 &&
 			len(in.TaprootMerkleRoot) == 0:
 
-			return input.TaprootKeySpendBIP0086SignMethod, nil
+			return TaprootKeySpendBIP0086SignMethod, nil
 
 		// A non-empty merkle root means we committed to a taproot hash
 		// that we need to use in the tap tweak.
@@ -656,7 +763,7 @@ func validateSigningMethod(in *psbt.PInput) (input.SignMethod, error) {
 					len(in.TaprootMerkleRoot), sha256.Size)
 			}
 
-			return input.TaprootKeySpendSignMethod, nil
+			return TaprootKeySpendSignMethod, nil
 
 		// Currently, we only support signing for one leaf at a time.
 		case len(derivation.LeafHashes) == 1:
@@ -682,7 +789,7 @@ func validateSigningMethod(in *psbt.PInput) (input.SignMethod, error) {
 					"was not found")
 			}
 
-			return input.TaprootScriptSpendSignMethod, nil
+			return TaprootScriptSpendSignMethod, nil
 
 		default:
 			return 0, fmt.Errorf("unsupported number of leaf " +
