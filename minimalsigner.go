@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/lightningnetwork/lnd/cert"
-	"github.com/lightningnetwork/lnd/lncfg"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"gopkg.in/macaroon-bakery.v2/bakery"
@@ -112,7 +111,7 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 		for _, grpcEndpoint := range cfg.RPCListeners {
 			// Start a gRPC server listening for HTTP/2
 			// connections.
-			lis, err := lncfg.ListenOnAddress(grpcEndpoint)
+			lis, err := ListenOnAddress(grpcEndpoint)
 			if err != nil {
 				return mkErr("unable to listen on %s: %v",
 					grpcEndpoint, err)
@@ -341,4 +340,27 @@ func startGrpcListen(cfg *Config, grpcServer *grpc.Server,
 	wg.Wait()
 
 	return nil
+}
+
+// parseNetwork parses the network type of the given address.
+func parseNetwork(addr net.Addr) string {
+	switch addr := addr.(type) {
+	// TCP addresses resolved through net.ResolveTCPAddr give a default
+	// network of "tcp", so we'll map back the correct network for the given
+	// address. This ensures that we can listen on the correct interface
+	// (IPv4 vs IPv6).
+	case *net.TCPAddr:
+		if addr.IP.To4() != nil {
+			return "tcp4"
+		}
+		return "tcp6"
+
+	default:
+		return addr.Network()
+	}
+}
+
+// ListenOnAddress creates a listener that listens on the given address.
+func ListenOnAddress(addr net.Addr) (net.Listener, error) {
+	return net.Listen(parseNetwork(addr), addr.String())
 }

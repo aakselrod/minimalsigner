@@ -18,7 +18,6 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	flags "github.com/jessevdk/go-flags"
-	"github.com/lightningnetwork/lnd/lncfg"
 )
 
 const (
@@ -400,7 +399,7 @@ func ValidateConfig(cfg Config, fileParser, flagParser *flags.Parser) (
 
 	// Add default port to all RPC listener addresses if needed and remove
 	// duplicate addresses.
-	cfg.RPCListeners, err = lncfg.NormalizeAddresses(
+	cfg.RPCListeners, err = NormalizeAddresses(
 		cfg.RawRPCListeners, strconv.Itoa(defaultRPCPort),
 		net.ResolveTCPAddr,
 	)
@@ -476,4 +475,106 @@ func get32BytesFromEnv(envKey string) ([32]byte, error) {
 	copy(key[:], keyBytes)
 
 	return key, nil
+}
+
+// TCPResolver is a function signature that resolves an address on a given
+// network.
+type TCPResolver = func(network, addr string) (*net.TCPAddr, error)
+
+// NormalizeAddresses returns a new slice with all the passed addresses
+// normalized with the given default port and all duplicates removed.
+func NormalizeAddresses(addrs []string, defaultPort string,
+	tcpResolver TCPResolver) ([]net.Addr, error) {
+
+	result := make([]net.Addr, 0, len(addrs))
+	seen := map[string]struct{}{}
+
+	for _, addr := range addrs {
+		parsedAddr, err := ParseAddressString(
+			addr, defaultPort, tcpResolver,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("parse address %s failed: %w",
+				addr, err)
+		}
+
+		if _, ok := seen[parsedAddr.String()]; !ok {
+			result = append(result, parsedAddr)
+			seen[parsedAddr.String()] = struct{}{}
+		}
+	}
+
+	return result, nil
+}
+
+// verifyPort makes sure that an address string has both a host and a port. If
+// there is no port found, the default port is appended. If the address is just
+// a port, then we'll assume that the user is using the short cut to specify a
+// localhost:port address.
+func verifyPort(address string, defaultPort string) string {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		// If the address itself is just an integer, then we'll assume
+		// that we're mapping this directly to a localhost:port pair.
+		// This ensures we maintain the legacy behavior.
+		if _, err := strconv.Atoi(address); err == nil {
+			return net.JoinHostPort("localhost", address)
+		}
+
+		// Otherwise, we'll assume that the address just failed to
+		// attach its own port, so we'll use the default port. In the
+		// case of IPv6 addresses, if the host is already surrounded by
+		// brackets, then we'll avoid using the JoinHostPort function,
+		// since it will always add a pair of brackets.
+		if strings.HasPrefix(address, "[") {
+			return address + ":" + defaultPort
+		}
+		return net.JoinHostPort(address, defaultPort)
+	}
+
+	// In the case that both the host and port are empty, we'll use the
+	// default port.
+	if host == "" && port == "" {
+		return ":" + defaultPort
+	}
+
+	return address
+}
+
+// ParseAddressString converts an address in string format to a net.Addr that is
+// compatible with lnd. UDP is not supported because lnd needs reliable
+// connections. We accept a custom function to resolve any TCP addresses so
+// that caller is able control exactly how resolution is performed.
+func ParseAddressString(strAddress string, defaultPort string,
+	tcpResolver TCPResolver) (net.Addr, error) {
+
+	var parsedNetwork, parsedAddr string
+
+	// Addresses can either be in network://address:port format,
+	// network:address:port, address:port, or just port. We want to support
+	// all possible types.
+	if strings.Contains(strAddress, "://") {
+		parts := strings.Split(strAddress, "://")
+		parsedNetwork, parsedAddr = parts[0], parts[1]
+	} else if strings.Contains(strAddress, ":") {
+		parts := strings.Split(strAddress, ":")
+		parsedNetwork = parts[0]
+		parsedAddr = strings.Join(parts[1:], ":")
+	}
+
+	// Only TCP and Unix socket addresses are valid. We can't use IP or
+	// UDP only connections for anything we do in lnd.
+	switch parsedNetwork {
+	case "unix", "unixpacket":
+		return net.ResolveUnixAddr(parsedNetwork, parsedAddr)
+
+	case "tcp", "tcp4", "tcp6":
+		return tcpResolver(
+			parsedNetwork, verifyPort(parsedAddr, defaultPort),
+		)
+
+	default:
+		return nil, fmt.Errorf("only TCP or unix socket "+
+			"addresses are supported: %s", parsedAddr)
+	}
 }
