@@ -7,7 +7,6 @@ import (
 	"github.com/aakselrod/minimalsigner/proto"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
-	"github.com/lightningnetwork/lnd/lnwire"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 )
 
@@ -108,12 +107,8 @@ func (s *signerServer) SignMessage(_ context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("can't sign the hash: %v", err)
 	}
-	wireSig, err := lnwire.NewSigFromSignature(sig)
-	if err != nil {
-		return nil, fmt.Errorf("can't convert to wire format: %v", err)
-	}
 	return &proto.SignMessageResp{
-		Signature: wireSig.ToSignatureBytes(),
+		Signature: sig.Serialize(),
 	}, nil
 }
 
