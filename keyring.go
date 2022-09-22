@@ -61,6 +61,27 @@ var (
 	// the key before signing the input. The value d0 is leet speak for
 	// "do", short for "double".
 	PsbtKeyTypeInputSignatureTweakDouble = []byte{0xd0}
+
+	// DefaultPurposes is a list of non-LN(1017) purposes for which we
+	// should create a m/purpose'/0'/0' account as well as their default
+	// address types.
+	DefaultPurposes = []struct {
+		Purpose  uint32
+		AddrType string
+	}{
+		{
+			Purpose:  49,
+			AddrType: "HYBRID_NESTED_WITNESS_PUBKEY_HASH",
+		},
+		{
+			Purpose:  84,
+			AddrType: "WITNESS_PUBKEY_HASH",
+		},
+		{
+			Purpose:  86,
+			AddrType: "TAPROOT_PUBKEY",
+		},
+	}
 )
 
 type KeyLocator struct {
@@ -83,12 +104,22 @@ type KeyDescriptor struct {
 type acct struct {
 	xPub     *hdkeychain.ExtendedKey
 	extXPriv *hdkeychain.ExtendedKey
+	intXPriv *hdkeychain.ExtendedKey
 }
 
 // KeyRing is an HD keyring backed by pre-derived in-memory account keys from
 // which index keys can be quickly derived on demand.
 type KeyRing struct {
-	coin  uint32
+	// coin lists the coin type (0 for Bitcoin mainnet, 1 for Bitcoin
+	// testnets such as signet or regtest.
+	coin uint32
+
+	// defaultAccts is a map by PURPOSE of accounts with coin type 0
+	// and account number 0 (m/mapKey'/0'/0').
+	defaultAccts map[uint32]acct
+
+	// accts is a map by ACCOUNT NUMBER of accounts with the purpose
+	// 1017 and the coin type above (m/1017'/coin'/mapKey').
 	accts map[uint32]acct
 }
 
@@ -101,7 +132,62 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 		return nil, err
 	}
 
-	// Derive purpose.
+	k := KeyRing{
+		coin:         net.HDCoinType,
+		defaultAccts: make(map[uint32]acct),
+		accts:        make(map[uint32]acct),
+	}
+
+	// Populate default-purpose families/accounts.
+	for _, acctInfo := range DefaultPurposes {
+		// Derive purpose.
+		subKey, err := rootKey.DeriveNonStandard(
+			acctInfo.Purpose + hdkeychain.HardenedKeyStart,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Derive coin.
+		subKey, err = subKey.DeriveNonStandard(
+			0 + hdkeychain.HardenedKeyStart,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Derive account.
+		subKey, err = subKey.DeriveNonStandard(
+			0 + hdkeychain.HardenedKeyStart,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		// Get account watch-only pubkey.
+		var account acct
+
+		account.xPub, err = subKey.Neuter()
+		if err != nil {
+			return nil, err
+		}
+
+		// Derive external branch for faster derivation by index.
+		account.extXPriv, err = subKey.DeriveNonStandard(0)
+		if err != nil {
+			return nil, err
+		}
+
+		// Derive internal branch for faster derivation by index.
+		account.intXPriv, err = subKey.DeriveNonStandard(1)
+		if err != nil {
+			return nil, err
+		}
+
+		k.defaultAccts[acctInfo.Purpose] = account
+	}
+
+	// Derive Lightning purpose.
 	rootKey, err = rootKey.DeriveNonStandard(
 		bip0043purpose + hdkeychain.HardenedKeyStart,
 	)
@@ -117,19 +203,14 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 		return nil, err
 	}
 
-	k := KeyRing{
-		coin:  net.HDCoinType,
-		accts: make(map[uint32]acct),
-	}
-
-	deriveAcct := func(act uint32) error {
-
+	// Populate Lightning-related families/accounts.
+	for i := uint32(0); i <= maxAcctID; i++ {
 		// Derive family/account.
 		subKey, err := rootKey.DeriveNonStandard(
-			act + hdkeychain.HardenedKeyStart,
+			i + hdkeychain.HardenedKeyStart,
 		)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		// Get account watch-only pubkey.
@@ -137,25 +218,16 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 
 		account.xPub, err = subKey.Neuter()
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		// Derive external branch only for faster derivation by index.
 		account.extXPriv, err = subKey.DeriveNonStandard(0)
 		if err != nil {
-			return err
-		}
-
-		k.accts[act] = account
-
-		return nil
-	}
-
-	// Populate Lightning-related families/accounts.
-	for i := uint32(0); i <= maxAcctID; i++ {
-		if err := deriveAcct(i); err != nil {
 			return nil, err
 		}
+
+		k.accts[i] = account
 	}
 
 	return &k, nil
@@ -458,25 +530,23 @@ func (k *KeyRing) deriveKeyByBIP32Path(path []uint32) (*btcec.PrivateKey,
 			"expected first three elements to be hardened: %w", err)
 	}
 
-	purpose := path[0] - hdkeychain.HardenedKeyStart
-	coinType := path[1] - hdkeychain.HardenedKeyStart
-	account := path[2] - hdkeychain.HardenedKeyStart
-	change, index := path[3], path[4]
-
 	// Is this a custom lnd internal purpose key?
+	purpose := path[0] - hdkeychain.HardenedKeyStart
 	if purpose != bip0043purpose {
-		return nil, fmt.Errorf("invalid BIP32 derivation path, "+
-			"unknown purpose %d", purpose)
+		return k.deriveKeyByDefaultBIP32Path(path)
 	}
 
 	// Make sure it's for the same coin type as our wallet's keychain scope.
+	coinType := path[1] - hdkeychain.HardenedKeyStart
 	if coinType != k.coin {
 		return nil, fmt.Errorf("invalid BIP32 derivation "+
 			"path, expected coin type %d, instead was %d",
 			k.coin, coinType)
 	}
 
-	// We only use external, not change, addresses.
+	// We only use external, not change, addresses, for LN purpose.
+	account := path[2] - hdkeychain.HardenedKeyStart
+	change, index := path[3], path[4]
 	if change != 0 {
 		return nil, fmt.Errorf("change addresses not supported")
 	}
@@ -487,6 +557,64 @@ func (k *KeyRing) deriveKeyByBIP32Path(path []uint32) (*btcec.PrivateKey,
 			Index:  index,
 		},
 	})
+}
+
+// deriveKeyByDefaultBIP32Path derives a key from a default account, with
+// the specified purpose. The coin type and account type must always be 0.
+// This will panic if not checked for the appropriate derivation depth and
+// hardening, as done in the calling deriveKeyByBIP32Path.
+func (k *KeyRing) deriveKeyByDefaultBIP32Path(path []uint32) (*btcec.PrivateKey,
+	error) {
+
+	// We should've already checked that purpose, cointype, and account are
+	// hardened and we have the appropriate derivation path depth.
+	purpose := path[0] - hdkeychain.HardenedKeyStart
+	account, ok := k.defaultAccts[purpose]
+	if !ok {
+		return nil, fmt.Errorf("invalid BIP32 derivation path, "+
+			"unknown purpose %d", purpose)
+	}
+
+	// Check that coinType is 0.
+	coinType := path[1] - hdkeychain.HardenedKeyStart
+	if coinType != 0 {
+		return nil, fmt.Errorf("invalid BIP32 derivation "+
+			"path, expected coin type 0, instead was %d", coinType)
+	}
+
+	// Check that account is 0.
+	act := path[2] - hdkeychain.HardenedKeyStart
+	if act != 0 {
+		return nil, fmt.Errorf("invalid BIP32 derivation "+
+			"path, expected account 0, instead was %d", account)
+	}
+
+	var key *hdkeychain.ExtendedKey
+
+	// We allow change addresses in default accounts, so we get the correct
+	// branch here.
+	change, index := path[3], path[4]
+	switch change {
+	case 0:
+		// External address.
+		key = account.extXPriv
+
+	case 1:
+		// Change address.
+		key = account.intXPriv
+
+	default:
+		// Invalid address.
+		return nil, fmt.Errorf("invalid BIP32 derivation path, "+
+			"expected branch 0 or 1, got %d", change)
+	}
+
+	key, err := key.DeriveNonStandard(index)
+	if err != nil {
+		return nil, err
+	}
+
+	return key.ECPrivKey()
 }
 
 // assertHardened makes sure each given element is >= 2^31.
@@ -840,10 +968,8 @@ func psbtPrevOutputFetcher(packet *psbt.Packet) *txscript.MultiPrevOutFetcher {
 func (k *KeyRing) ListAccounts() []byte {
 	acctList := "{\n    \"accounts\": [\n"
 
-	strCoin := fmt.Sprintf("%d", k.coin)
-
-	for act := uint32(0); act <= maxAcctID; act++ {
-		account := k.accts[act]
+	listAccount := func(act uint32, account acct, addrType, purpose,
+		coin string) {
 
 		strAct := fmt.Sprintf("%d", act)
 
@@ -857,15 +983,16 @@ func (k *KeyRing) ListAccounts() []byte {
 		}
 		acctList += "\",\n"
 
-		acctList += "            \"address_type\": \"WITNESS_PUBKEY_HASH\",\n"
+		acctList += "            \"address_type\": \"" + addrType +
+			"\",\n"
 
 		acctList += "            \"extended_public_key\": \"" +
 			account.xPub.String() + "\",\n"
 
 		acctList += "            \"master_key_fingerprint\": null,\n"
 
-		acctList += "            \"derivation_path\": \"m/1017'/" +
-			strCoin + "'/" + strAct + "'\",\n"
+		acctList += "            \"derivation_path\": \"m/" + purpose +
+			"'/" + coin + "'/" + strAct + "'\",\n"
 
 		acctList += "            \"external_key_count\": 0,\n"
 
@@ -874,6 +1001,25 @@ func (k *KeyRing) ListAccounts() []byte {
 		acctList += "            \"watch_only\": false\n"
 
 		acctList += "        }"
+	}
+
+	for _, acctInfo := range DefaultPurposes {
+		account := k.defaultAccts[acctInfo.Purpose]
+
+		strPurpose := fmt.Sprintf("%d", acctInfo.Purpose)
+
+		listAccount(0, account, acctInfo.AddrType, strPurpose, "0")
+
+		acctList += ",\n"
+	}
+
+	strCoin := fmt.Sprintf("%d", k.coin)
+
+	for act := uint32(0); act <= maxAcctID; act++ {
+		account := k.accts[act]
+
+		listAccount(act, account, "WITNESS_PUBKEY_HASH", "1017",
+			strCoin)
 
 		if act < maxAcctID {
 			acctList += ","
