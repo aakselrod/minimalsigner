@@ -162,10 +162,6 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 		}
 	}
 
-	// Set up the core server which will listen for incoming peer
-	// connections.
-	server := newServer(keyRing)
-
 	// Create a new macaroon service.
 	rootKeyStore := &assignedRootKeyStore{
 		key: cfg.macRootKey[:],
@@ -205,7 +201,7 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 
 	// Now we have created all dependencies necessary to populate and
 	// start the RPC server.
-	err = rpcServer.addDeps(server, bkry.Checker)
+	err = rpcServer.addDeps(keyRing, bkry.Checker)
 	if err != nil {
 		return mkErr("unable to add deps to RPC server: %v", err)
 	}

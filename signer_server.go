@@ -32,7 +32,7 @@ type signerServer struct {
 	// Required by the grpc-gateway/v2 library for forward compatibility.
 	proto.UnimplementedSignerServer
 
-	server *server
+	server *rpcServer
 }
 
 // A compile time check to ensure that Server fully implements the SignerServer

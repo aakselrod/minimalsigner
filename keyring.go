@@ -19,7 +19,7 @@ import (
 
 // maxAccts is the number of accounts/key families to create on initialization.
 const (
-	maxAcctID      = 16
+	maxAcctID      = 255
 	nodeKeyAcct    = 6
 	bip0043purpose = 1017
 )

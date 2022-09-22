@@ -27,7 +27,7 @@ type walletKit struct {
 	// Required by the grpc-gateway/v2 library for forward compatibility.
 	proto.UnimplementedWalletKitServer
 
-	server *server
+	server *rpcServer
 }
 
 // A compile time check to ensure that walletKit fully implements the

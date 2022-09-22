@@ -100,7 +100,7 @@ type rpcServer struct {
 	// alignment.
 	proto.UnimplementedLightningServer
 
-	server *server
+	keyRing *KeyRing
 
 	cfg *Config
 
@@ -124,7 +124,7 @@ func newRPCServer(cfg *Config) *rpcServer {
 // addDeps populates all dependencies needed by the RPC server, and any
 // of the sub-servers that it maintains. When this is done, the RPC server can
 // be started, and start accepting RPC calls.
-func (r *rpcServer) addDeps(s *server, checker *bakery.Checker) error {
+func (r *rpcServer) addDeps(k *KeyRing, checker *bakery.Checker) error {
 	// Next, we need to merge the set of sub server macaroon permissions
 	// with the main RPC server permissions so we can unite them under a
 	// single set of interceptors.
@@ -153,7 +153,7 @@ func (r *rpcServer) addDeps(s *server, checker *bakery.Checker) error {
 
 	// Finally, with all the set up complete, add the last dependencies to
 	// the rpc server.
-	r.server = s
+	r.keyRing = k
 
 	return nil
 }
@@ -165,13 +165,17 @@ func (r *rpcServer) RegisterWithGrpcServer(grpcServer *grpc.Server) error {
 	proto.RegisterLightningServer(grpcServer, r)
 
 	// Register the wallet subserver.
-	proto.RegisterWalletKitServer(grpcServer, &walletKit{
-		server: r.server,
+	walletDesc := proto.WalletKit_ServiceDesc
+	walletDesc.ServiceName = "walletrpc.WalletKit"
+	grpcServer.RegisterService(&walletDesc, &walletKit{
+		server: r,
 	})
 
 	// Register the signer subserver.
-	proto.RegisterSignerServer(grpcServer, &signerServer{
-		server: r.server,
+	signerDesc := proto.Signer_ServiceDesc
+	signerDesc.ServiceName = "signrpc.Signer"
+	grpcServer.RegisterService(&signerDesc, &signerServer{
+		server: r,
 	})
 
 	return nil
@@ -202,7 +206,7 @@ func (r *rpcServer) SignMessage(_ context.Context,
 		Index:  0,
 	}
 
-	sigBytes, err := r.server.keyRing.SignMessageCompact(
+	sigBytes, err := r.keyRing.SignMessageCompact(
 		keyLoc, in.Msg, !in.SingleHash,
 	)
 	if err != nil {
