@@ -66,20 +66,33 @@ var (
 	// should create a m/purpose'/0'/0' account as well as their default
 	// address types.
 	DefaultPurposes = []struct {
-		Purpose  uint32
-		AddrType string
+		Purpose   uint32
+		AddrType  string
+		HDVersion [2][4]byte
 	}{
 		{
 			Purpose:  49,
 			AddrType: "HYBRID_NESTED_WITNESS_PUBKEY_HASH",
+			HDVersion: [2][4]byte{
+				[4]byte{0x04, 0x9d, 0x7c, 0xb2}, // ypub
+				[4]byte{0x04, 0x4a, 0x52, 0x62}, // upub
+			},
 		},
 		{
 			Purpose:  84,
 			AddrType: "WITNESS_PUBKEY_HASH",
+			HDVersion: [2][4]byte{
+				[4]byte{0x04, 0xb2, 0x47, 0x46}, // zpub
+				[4]byte{0x04, 0x5f, 0x1c, 0xf6}, // vpub
+			},
 		},
 		{
 			Purpose:  86,
 			AddrType: "TAPROOT_PUBKEY",
+			HDVersion: [2][4]byte{
+				[4]byte{0x04, 0x88, 0xb2, 0x1e}, // xpub
+				[4]byte{0x04, 0x35, 0x87, 0xcf}, // tpub
+			},
 		},
 	}
 )
@@ -139,7 +152,9 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 	}
 
 	// Populate default-purpose families/accounts.
-	for _, acctInfo := range DefaultPurposes {
+	for i := range DefaultPurposes {
+		acctInfo := DefaultPurposes[i]
+
 		// Derive purpose.
 		subKey, err := rootKey.DeriveNonStandard(
 			acctInfo.Purpose + hdkeychain.HardenedKeyStart,
@@ -168,6 +183,14 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 		var account acct
 
 		account.xPub, err = subKey.Neuter()
+		if err != nil {
+			return nil, err
+		}
+
+		// Ensure we get the right HDVersion for the account key.
+		account.xPub, err = account.xPub.CloneWithVersion(
+			acctInfo.HDVersion[net.HDCoinType][:],
+		)
 		if err != nil {
 			return nil, err
 		}

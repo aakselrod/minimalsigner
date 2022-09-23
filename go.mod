@@ -7,7 +7,6 @@ require (
 	github.com/btcsuite/btcd/btcutil/psbt v1.1.5
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.0.1
 	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f
-	github.com/go-errors/errors v1.1.1
 	github.com/jessevdk/go-flags v1.4.0
 	github.com/lightningnetwork/lnd/cert v1.1.1
 	github.com/tv42/zbase32 v0.0.0-20160707012821-501572607d02
