@@ -525,6 +525,7 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 		}
 		signedInputs = append(signedInputs, uint32(idx))
 	}
+
 	return signedInputs, nil
 }
 
@@ -740,8 +741,8 @@ func signSegWitV1ScriptSpend(in *psbt.PInput, tx *wire.MsgTx,
 func prepareScriptsV0(in *psbt.PInput) []byte {
 	switch {
 	// It's a NP2WKH input:
-	case len(in.RedeemScript) > 0:
-		return in.RedeemScript
+	//case len(in.RedeemScript) > 0:
+	//	return in.RedeemScript
 
 	// It's a P2WSH input:
 	case len(in.WitnessScript) > 0:
