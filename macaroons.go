@@ -24,6 +24,6 @@ func (s *assignedRootKeyStore) RootKey(ctx context.Context) ([]byte, []byte,
 
 // check is a caveat checker. It does nothing for now, except a bit of logging.
 func check(caveat string) error {
-	signerLog.Debugf("checking caveat: %s", caveat)
+	signerLog.Tracef("checking caveat: %s", caveat)
 	return nil
 }

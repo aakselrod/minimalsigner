@@ -33,69 +33,15 @@ var (
 		},
 	}
 
-	// TODO(guggero): Refactor into constants that are used for all
-	// permissions in this file. Also expose the list of possible
-	// permissions in an RPC when per RPC permissions are
-	// implemented.
-	validActions  = []string{"write", "generate"}
-	validEntities = []string{"onchain", "message", "signer"}
-)
-
-// stringInSlice returns true if a string is contained in the given slice.
-func stringInSlice(a string, slice []string) bool {
-	for _, b := range slice {
-		if b == a {
-			return true
-		}
-	}
-	return false
-}
-
-// GetAllPermissions returns all the permissions required to interact with lnd.
-func GetAllPermissions() []bakery.Op {
-	allPerms := make([]bakery.Op, 0)
-
-	// The map will help keep track of which specific permission pairs have
-	// already been added to the slice.
-	allPermsMap := make(map[string]map[string]struct{})
-
-	for _, perms := range MainRPCServerPermissions() {
-		for _, perm := range perms {
-			entity := perm.Entity
-			action := perm.Action
-
-			// If this specific entity-action permission pair isn't
-			// in the map yet. Add it to map, and the permission
-			// slice.
-			if acts, ok := allPermsMap[entity]; ok {
-				if _, ok := acts[action]; !ok {
-					allPermsMap[entity][action] = struct{}{}
-
-					allPerms = append(
-						allPerms, perm,
-					)
-				}
-			} else {
-				allPermsMap[entity] = make(map[string]struct{})
-				allPermsMap[entity][action] = struct{}{}
-				allPerms = append(allPerms, perm)
-			}
-		}
-	}
-
-	return allPerms
-}
-
-// MainRPCServerPermissions returns a mapping of the main RPC server calls to
-// the permissions they require.
-func MainRPCServerPermissions() map[string][]bakery.Op {
-	return map[string][]bakery.Op{
+	// mainRPCServerPermissions is a mapping of the main RPC server calls
+	// to the permissions they require.
+	mainRPCServerPermissions = map[string][]bakery.Op{
 		"/proto.Lightning/SignMessage": {{
 			Entity: "message",
 			Action: "write",
 		}},
 	}
-}
+)
 
 // rpcServer is a gRPC, RPC front end to the lnd daemon.
 // TODO(roasbeef): pagination support for the list-style calls
@@ -212,10 +158,12 @@ func (r *rpcServer) checkMac(ctx context.Context, method string) error {
 // root gRPC server.
 func (r *rpcServer) RegisterWithGrpcServer(grpcServer *grpc.Server) error {
 	// Register the main RPC server.
-	for k, v := range MainRPCServerPermissions() {
+	for k, v := range mainRPCServerPermissions {
 		r.perms[k] = v
 	}
-	proto.RegisterLightningServer(grpcServer, r)
+	lnDesc := proto.Lightning_ServiceDesc
+	lnDesc.ServiceName = "lnrpc.Lightning"
+	grpcServer.RegisterService(&lnDesc, r)
 
 	// Register the wallet subserver.
 	for k, v := range walletPermissions {
