@@ -7,6 +7,9 @@ import (
 	"github.com/aakselrod/minimalsigner/proto"
 	"github.com/tv42/zbase32"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"gopkg.in/macaroon-bakery.v2/bakery"
 )
 
@@ -102,9 +105,9 @@ type rpcServer struct {
 
 	keyRing *KeyRing
 
-	cfg *Config
+	checker *bakery.Checker
 
-	quit chan struct{}
+	cfg *Config
 }
 
 // A compile time check to ensure that rpcServer fully implements the
@@ -114,48 +117,33 @@ var _ proto.LightningServer = (*rpcServer)(nil)
 // newRPCServer creates and returns a new instance of the rpcServer. Before
 // dependencies are added, this will be an non-functioning RPC server only to
 // be used to register the LightningService with the gRPC server.
-func newRPCServer(cfg *Config) *rpcServer {
+func newRPCServer(cfg *Config, k *KeyRing, checker *bakery.Checker) *rpcServer {
 	return &rpcServer{
-		cfg:  cfg,
-		quit: make(chan struct{}, 1),
+		cfg:     cfg,
+		keyRing: k,
+		checker: checker,
 	}
 }
 
-// addDeps populates all dependencies needed by the RPC server, and any
-// of the sub-servers that it maintains. When this is done, the RPC server can
-// be started, and start accepting RPC calls.
-func (r *rpcServer) addDeps(k *KeyRing, checker *bakery.Checker) error {
-	// Next, we need to merge the set of sub server macaroon permissions
-	// with the main RPC server permissions so we can unite them under a
-	// single set of interceptors.
-	/*for m, ops := range MainRPCServerPermissions() {
-		err := r.interceptorChain.AddPermission(m, ops)
-		if err != nil {
-			return err
-		}
+// intercept allows the RPC server to intercept requests to ensure that they're
+// authorized by a macaroon signed by the macaroon root key.
+func (r *rpcServer) intercept(ctx context.Context, req interface{},
+	info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (
+	interface{}, error) {
+
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "no metadata")
 	}
 
-	// Wallet kit permissions.
-	for m, ops := range walletPermissions {
-		err := r.interceptorChain.AddPermission(m, ops)
-		if err != nil {
-			return err
-		}
+	macaroonHex, ok := md["macaroon"]
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "no macaroon")
 	}
 
-	// signer permissions.
-	for m, ops := range signerPermissions {
-		err := r.interceptorChain.AddPermission(m, ops)
-		if err != nil {
-			return err
-		}
-	}*/
+	signerLog.Infof("got macaroon: %+v", macaroonHex)
 
-	// Finally, with all the set up complete, add the last dependencies to
-	// the rpc server.
-	r.keyRing = k
-
-	return nil
+	return handler(ctx, req)
 }
 
 // RegisterWithGrpcServer registers the rpcServer and any subservers with the

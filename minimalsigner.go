@@ -97,54 +97,6 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	serverOpts, err := getTLSConfig(cfg)
-	if err != nil {
-		return mkErr("unable to load TLS credentials: %v", err)
-	}
-
-	// If we have chosen to start with a dedicated listener for the
-	// rpc server, we set it directly.
-	grpcListeners := append([]*ListenerWithSignal{}, lisCfg.RPCListeners...)
-	if len(grpcListeners) == 0 {
-		// Otherwise we create listeners from the RPCListeners defined
-		// in the config.
-		for _, grpcEndpoint := range cfg.RPCListeners {
-			// Start a gRPC server listening for HTTP/2
-			// connections.
-			lis, err := ListenOnAddress(grpcEndpoint)
-			if err != nil {
-				return mkErr("unable to listen on %s: %v",
-					grpcEndpoint, err)
-			}
-			defer lis.Close()
-
-			grpcListeners = append(
-				grpcListeners, &ListenerWithSignal{
-					Listener: lis,
-					Ready:    make(chan struct{}),
-				},
-			)
-		}
-	}
-
-	grpcServer := grpc.NewServer(serverOpts...)
-	defer grpcServer.Stop()
-
-	// Initialize, and register our implementation of the gRPC interface
-	// exported by the rpcServer.
-	rpcServer := newRPCServer(cfg)
-	err = rpcServer.RegisterWithGrpcServer(grpcServer)
-	if err != nil {
-		return mkErr("error registering gRPC server: %v", err)
-	}
-
-	// Now that both the WalletUnlocker and LightningService have been
-	// registered with the GRPC server, we can start listening.
-	err = startGrpcListen(cfg, grpcServer, grpcListeners)
-	if err != nil {
-		return mkErr("error starting gRPC listener: %v", err)
-	}
-
 	keyRing, err := NewKeyRing(cfg.seed[:], &cfg.ActiveNetParams)
 	if err != nil {
 		return mkErr("error creating keyring: %v", err)
@@ -199,11 +151,60 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 		}
 	}
 
-	// Now we have created all dependencies necessary to populate and
-	// start the RPC server.
-	err = rpcServer.addDeps(keyRing, bkry.Checker)
+	serverOpts, err := getTLSConfig(cfg)
 	if err != nil {
-		return mkErr("unable to add deps to RPC server: %v", err)
+		return mkErr("unable to load TLS credentials: %v", err)
+	}
+
+	// If we have chosen to start with a dedicated listener for the
+	// rpc server, we set it directly.
+	grpcListeners := append([]*ListenerWithSignal{}, lisCfg.RPCListeners...)
+	if len(grpcListeners) == 0 {
+		// Otherwise we create listeners from the RPCListeners defined
+		// in the config.
+		for _, grpcEndpoint := range cfg.RPCListeners {
+			// Start a gRPC server listening for HTTP/2
+			// connections.
+			lis, err := ListenOnAddress(grpcEndpoint)
+			if err != nil {
+				return mkErr("unable to listen on %s: %v",
+					grpcEndpoint, err)
+			}
+			defer lis.Close()
+
+			grpcListeners = append(
+				grpcListeners, &ListenerWithSignal{
+					Listener: lis,
+					Ready:    make(chan struct{}),
+				},
+			)
+		}
+	}
+
+	// Initialize the rpcServer and add its interceptor to the server
+	// options.
+	rpcServer := newRPCServer(cfg, keyRing, bkry.Checker)
+	serverOpts = append(
+		serverOpts,
+		grpc.ChainUnaryInterceptor(rpcServer.intercept),
+	)
+
+	// Create the GRPC server with the TLS and interceptor configuration.
+	grpcServer := grpc.NewServer(serverOpts...)
+	defer grpcServer.Stop()
+
+	// Register our implementation of the gRPC interface exported by the
+	// rpcServer.
+	err = rpcServer.RegisterWithGrpcServer(grpcServer)
+	if err != nil {
+		return mkErr("error registering gRPC server: %v", err)
+	}
+
+	// Now that both the WalletUnlocker and LightningService have been
+	// registered with the GRPC server, we can start listening.
+	err = startGrpcListen(cfg, grpcServer, grpcListeners)
+	if err != nil {
+		return mkErr("error starting gRPC listener: %v", err)
 	}
 
 	// Wait for shutdown signal from the interrupt handler.
