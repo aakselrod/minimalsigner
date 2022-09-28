@@ -13,11 +13,11 @@ import (
 var (
 	// signerPermissions maps RPC calls to the permissions they require.
 	signerPermissions = map[string][]bakery.Op{
-		"/signrpc.Signer/SignMessage": {{
+		"/proto.Signer/SignMessage": {{
 			Entity: "signer",
 			Action: "generate",
 		}},
-		"/signrpc.Signer/DeriveSharedKey": {{
+		"/proto.Signer/DeriveSharedKey": {{
 			Entity: "signer",
 			Action: "generate",
 		}},

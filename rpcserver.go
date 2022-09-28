@@ -2,6 +2,7 @@ package minimalsigner
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/aakselrod/minimalsigner/proto"
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"gopkg.in/macaroon-bakery.v2/bakery"
+	"gopkg.in/macaroon.v2"
 )
 
 var (
@@ -88,7 +90,7 @@ func GetAllPermissions() []bakery.Op {
 // the permissions they require.
 func MainRPCServerPermissions() map[string][]bakery.Op {
 	return map[string][]bakery.Op{
-		"/lnrpc.Lightning/SignMessage": {{
+		"/proto.Lightning/SignMessage": {{
 			Entity: "message",
 			Action: "write",
 		}},
@@ -102,6 +104,8 @@ type rpcServer struct {
 	// Must be after the atomically used variables to not break struct
 	// alignment.
 	proto.UnimplementedLightningServer
+
+	perms map[string][]bakery.Op
 
 	keyRing *KeyRing
 
@@ -122,6 +126,7 @@ func newRPCServer(cfg *Config, k *KeyRing, checker *bakery.Checker) *rpcServer {
 		cfg:     cfg,
 		keyRing: k,
 		checker: checker,
+		perms:   make(map[string][]bakery.Op),
 	}
 }
 
@@ -131,28 +136,91 @@ func (r *rpcServer) intercept(ctx context.Context, req interface{},
 	info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (
 	interface{}, error) {
 
+	err := r.checkMac(ctx, info.FullMethod)
+	if err != nil {
+		return nil, err
+	}
+
+	return handler(ctx, req)
+}
+
+func (r *rpcServer) checkMac(ctx context.Context, method string) error {
+
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "no metadata")
+		signerLog.Warnf("request for %v without metadata", method)
+		return status.Error(codes.Unauthenticated, "no metadata")
 	}
 
 	macaroonHex, ok := md["macaroon"]
 	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "no macaroon")
+		signerLog.Warnf("request for %v without macaroons", method)
+		return status.Error(codes.Unauthenticated, "no macaroons")
 	}
 
-	signerLog.Infof("got macaroon: %+v", macaroonHex)
+	var macSlice macaroon.Slice
 
-	return handler(ctx, req)
+	for _, macHex := range macaroonHex {
+		macBytes, err := hex.DecodeString(macHex)
+		if err != nil {
+			signerLog.Warnf("failed to decode macaroon hex "+
+				"for %v: %v", method, err)
+			continue
+		}
+
+		mac := &macaroon.Macaroon{}
+		err = mac.UnmarshalBinary(macBytes)
+		if err != nil {
+			signerLog.Warnf("failed to unmarshal macaroon bytes "+
+				"for %v: %v", method, err)
+			continue
+		}
+
+		err = mac.Verify(r.cfg.macRootKey[:], check, nil)
+		if err != nil {
+			signerLog.Warnf("failed to verify macaroon "+
+				"for %v: %v", method, err)
+			continue
+		}
+
+		macSlice = append(macSlice, mac)
+	}
+
+	if len(macSlice) == 0 {
+		signerLog.Warnf("macaroon authentication failure for %v",
+			method)
+		return status.Error(codes.Unauthenticated,
+			"macaroon authentication failure")
+	}
+
+	authChecker := r.checker.Auth(macSlice)
+	authInfo, err := authChecker.Allow(ctx, r.perms[method]...)
+	if err != nil {
+		signerLog.Warnf("macaroon authorization failure for %v: %v",
+			method, err)
+		return status.Error(codes.PermissionDenied,
+			"macaroon authorization failure")
+	}
+
+	signerLog.Debugf("successfully authorized request to %v", method)
+	signerLog.Tracef("auth info for %v: %+v", method, authInfo)
+
+	return nil
 }
 
 // RegisterWithGrpcServer registers the rpcServer and any subservers with the
 // root gRPC server.
 func (r *rpcServer) RegisterWithGrpcServer(grpcServer *grpc.Server) error {
 	// Register the main RPC server.
+	for k, v := range MainRPCServerPermissions() {
+		r.perms[k] = v
+	}
 	proto.RegisterLightningServer(grpcServer, r)
 
 	// Register the wallet subserver.
+	for k, v := range walletPermissions {
+		r.perms[k] = v
+	}
 	walletDesc := proto.WalletKit_ServiceDesc
 	walletDesc.ServiceName = "walletrpc.WalletKit"
 	grpcServer.RegisterService(&walletDesc, &walletKit{
@@ -160,6 +228,9 @@ func (r *rpcServer) RegisterWithGrpcServer(grpcServer *grpc.Server) error {
 	})
 
 	// Register the signer subserver.
+	for k, v := range signerPermissions {
+		r.perms[k] = v
+	}
 	signerDesc := proto.Signer_ServiceDesc
 	signerDesc.ServiceName = "signrpc.Signer"
 	grpcServer.RegisterService(&signerDesc, &signerServer{

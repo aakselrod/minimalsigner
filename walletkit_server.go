@@ -13,7 +13,7 @@ import (
 var (
 	// macPermissions maps RPC calls to the permissions they require.
 	walletPermissions = map[string][]bakery.Op{
-		"/walletrpc.WalletKit/SignPsbt": {{
+		"/proto.WalletKit/SignPsbt": {{
 			Entity: "onchain",
 			Action: "write",
 		}},
