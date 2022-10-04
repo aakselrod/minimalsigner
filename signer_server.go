@@ -11,10 +11,6 @@ import (
 	"gopkg.in/macaroon-bakery.v2/bakery"
 )
 
-const (
-	nodeKeyAcct = 6
-)
-
 var (
 	// signerPermissions maps RPC calls to the permissions they require.
 	signerPermissions = map[string][]bakery.Op{
@@ -163,7 +159,7 @@ func (s *signerServer) DeriveSharedKey(_ context.Context,
 	// key.
 	if keyLoc == nil {
 		keyLoc = &proto.KeyLocator{
-			KeyFamily: int32(nodeKeyAcct),
+			KeyFamily: int32(keyring.NodeKeyAcct),
 			KeyIndex:  0,
 		}
 	}

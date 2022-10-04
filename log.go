@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 
+	"github.com/aakselrod/minimalsigner/keyring"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btclog"
 )
@@ -25,6 +26,9 @@ func setLogLevel(level string) error {
 
 	txscriptLog.SetLevel(logLevel)
 	txscript.UseLogger(txscriptLog)
+
+	keyringLog.SetLevel(logLevel)
+	keyring.UseLogger(keyringLog)
 
 	return nil
 }

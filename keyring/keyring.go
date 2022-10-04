@@ -21,6 +21,8 @@ import (
 const (
 	maxAcctID      = 255
 	bip0043purpose = 1017
+
+	NodeKeyAcct = 6
 )
 
 // signMethod defines the different ways a signer can sign, given a specific
