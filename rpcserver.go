@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/aakselrod/minimalsigner/keyring"
 	"github.com/aakselrod/minimalsigner/proto"
 	"github.com/tv42/zbase32"
 	"google.golang.org/grpc"
@@ -53,7 +54,7 @@ type rpcServer struct {
 
 	perms map[string][]bakery.Op
 
-	keyRing *KeyRing
+	keyRing *keyring.KeyRing
 
 	checker *bakery.Checker
 
@@ -67,7 +68,9 @@ var _ proto.LightningServer = (*rpcServer)(nil)
 // newRPCServer creates and returns a new instance of the rpcServer. Before
 // dependencies are added, this will be an non-functioning RPC server only to
 // be used to register the LightningService with the gRPC server.
-func newRPCServer(cfg *Config, k *KeyRing, checker *bakery.Checker) *rpcServer {
+func newRPCServer(cfg *Config, k *keyring.KeyRing,
+	checker *bakery.Checker) *rpcServer {
+
 	return &rpcServer{
 		cfg:     cfg,
 		keyRing: k,
@@ -208,7 +211,7 @@ func (r *rpcServer) SignMessage(_ context.Context,
 	}
 
 	in.Msg = append(signedMsgPrefix, in.Msg...)
-	keyLoc := KeyLocator{
+	keyLoc := keyring.KeyLocator{
 		Family: 6,
 		Index:  0,
 	}

@@ -4,10 +4,15 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/aakselrod/minimalsigner/keyring"
 	"github.com/aakselrod/minimalsigner/proto"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"gopkg.in/macaroon-bakery.v2/bakery"
+)
+
+const (
+	nodeKeyAcct = 6
 )
 
 var (
@@ -56,7 +61,7 @@ func (s *signerServer) SignMessage(_ context.Context,
 	}
 
 	// Describe the private key we'll be using for signing.
-	keyLocator := KeyLocator{
+	keyLocator := keyring.KeyLocator{
 		Family: uint32(in.KeyLoc.KeyFamily),
 		Index:  uint32(in.KeyLoc.KeyIndex),
 	}
@@ -180,8 +185,8 @@ func (s *signerServer) DeriveSharedKey(_ context.Context,
 	// Create a key descriptor. When the KeyIndex is not specified, it uses
 	// the empty value 0, and when the raw public key is not specified, the
 	// pk is nil.
-	keyDescriptor := KeyDescriptor{
-		KeyLocator: KeyLocator{
+	keyDescriptor := keyring.KeyDescriptor{
+		KeyLocator: keyring.KeyLocator{
 			Family: uint32(keyLoc.KeyFamily),
 			Index:  uint32(keyLoc.KeyIndex),
 		},

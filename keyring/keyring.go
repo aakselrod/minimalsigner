@@ -1,4 +1,4 @@
-package minimalsigner
+package keyring
 
 import (
 	"bytes"
@@ -20,33 +20,32 @@ import (
 // maxAccts is the number of accounts/key families to create on initialization.
 const (
 	maxAcctID      = 255
-	nodeKeyAcct    = 6
 	bip0043purpose = 1017
 )
 
-// SignMethod defines the different ways a signer can sign, given a specific
+// signMethod defines the different ways a signer can sign, given a specific
 // input.
-type SignMethod uint8
+type signMethod uint8
 
 const (
 	// WitnessV0SignMethod denotes that a SegWit v0 (p2wkh, np2wkh, p2wsh)
 	// input script should be signed.
-	WitnessV0SignMethod SignMethod = 0
+	witnessV0SignMethod signMethod = 0
 
 	// TaprootKeySpendBIP0086SignMethod denotes that a SegWit v1 (p2tr)
 	// input should be signed by using the BIP0086 method (commit to
 	// internal key only).
-	TaprootKeySpendBIP0086SignMethod SignMethod = 1
+	taprootKeySpendBIP0086SignMethod signMethod = 1
 
 	// TaprootKeySpendSignMethod denotes that a SegWit v1 (p2tr)
 	// input should be signed by using a given taproot hash to commit to in
 	// addition to the internal key.
-	TaprootKeySpendSignMethod SignMethod = 2
+	taprootKeySpendSignMethod signMethod = 2
 
 	// TaprootScriptSpendSignMethod denotes that a SegWit v1 (p2tr) input
 	// should be spent using the script path and that a specific leaf script
 	// should be signed for.
-	TaprootScriptSpendSignMethod SignMethod = 3
+	taprootScriptSpendSignMethod signMethod = 3
 )
 
 var (
@@ -54,42 +53,42 @@ var (
 	// for an input that specifies what single tweak should be applied to
 	// the key before signing the input. The value 51 is leet speak for
 	// "si", short for "single".
-	PsbtKeyTypeInputSignatureTweakSingle = []byte{0x51}
+	psbtKeyTypeInputSignatureTweakSingle = []byte{0x51}
 
 	// PsbtKeyTypeInputSignatureTweakDouble is a custom/proprietary PSBT key
 	// for an input that specifies what double tweak should be applied to
 	// the key before signing the input. The value d0 is leet speak for
 	// "do", short for "double".
-	PsbtKeyTypeInputSignatureTweakDouble = []byte{0xd0}
+	psbtKeyTypeInputSignatureTweakDouble = []byte{0xd0}
 
 	// DefaultPurposes is a list of non-LN(1017) purposes for which we
 	// should create a m/purpose'/0'/0' account as well as their default
 	// address types.
-	DefaultPurposes = []struct {
-		Purpose   uint32
-		AddrType  string
-		HDVersion [2][4]byte
+	defaultPurposes = []struct {
+		purpose   uint32
+		addrType  string
+		hdVersion [2][4]byte
 	}{
 		{
-			Purpose:  49,
-			AddrType: "HYBRID_NESTED_WITNESS_PUBKEY_HASH",
-			HDVersion: [2][4]byte{
+			purpose:  49,
+			addrType: "HYBRID_NESTED_WITNESS_PUBKEY_HASH",
+			hdVersion: [2][4]byte{
 				[4]byte{0x04, 0x9d, 0x7c, 0xb2}, // ypub
 				[4]byte{0x04, 0x4a, 0x52, 0x62}, // upub
 			},
 		},
 		{
-			Purpose:  84,
-			AddrType: "WITNESS_PUBKEY_HASH",
-			HDVersion: [2][4]byte{
+			purpose:  84,
+			addrType: "WITNESS_PUBKEY_HASH",
+			hdVersion: [2][4]byte{
 				[4]byte{0x04, 0xb2, 0x47, 0x46}, // zpub
 				[4]byte{0x04, 0x5f, 0x1c, 0xf6}, // vpub
 			},
 		},
 		{
-			Purpose:  86,
-			AddrType: "TAPROOT_PUBKEY",
-			HDVersion: [2][4]byte{
+			purpose:  86,
+			addrType: "TAPROOT_PUBKEY",
+			hdVersion: [2][4]byte{
 				[4]byte{0x04, 0x88, 0xb2, 0x1e}, // xpub
 				[4]byte{0x04, 0x35, 0x87, 0xcf}, // tpub
 			},
@@ -152,12 +151,12 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 	}
 
 	// Populate default-purpose families/accounts.
-	for i := range DefaultPurposes {
-		acctInfo := DefaultPurposes[i]
+	for i := range defaultPurposes {
+		acctInfo := defaultPurposes[i]
 
 		// Derive purpose.
 		subKey, err := rootKey.DeriveNonStandard(
-			acctInfo.Purpose + hdkeychain.HardenedKeyStart,
+			acctInfo.purpose + hdkeychain.HardenedKeyStart,
 		)
 		if err != nil {
 			return nil, err
@@ -189,7 +188,7 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 
 		// Ensure we get the right HDVersion for the account key.
 		account.xPub, err = account.xPub.CloneWithVersion(
-			acctInfo.HDVersion[net.HDCoinType][:],
+			acctInfo.hdVersion[net.HDCoinType][:],
 		)
 		if err != nil {
 			return nil, err
@@ -207,7 +206,7 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 			return nil, err
 		}
 
-		k.defaultAccts[acctInfo.Purpose] = account
+		k.defaultAccts[acctInfo.purpose] = account
 	}
 
 	// Derive Lightning purpose.
@@ -263,7 +262,7 @@ func (k *KeyRing) DeriveKey(keyLoc KeyLocator) (KeyDescriptor, error) {
 	var keyDesc KeyDescriptor
 	keyDesc.KeyLocator = keyLoc
 
-	privKey, err := k.DerivePrivKey(keyDesc)
+	privKey, err := k.derivePrivKey(keyDesc)
 	if err != nil {
 		return KeyDescriptor{}, err
 	}
@@ -273,15 +272,15 @@ func (k *KeyRing) DeriveKey(keyLoc KeyLocator) (KeyDescriptor, error) {
 	return keyDesc, nil
 }
 
-// DerivePrivKey attempts to derive the private key that corresponds to
+// derivePrivKey attempts to derive the private key that corresponds to
 // the passed key descriptor. It does not attempt to scan for a public key
 // but only uses the key locator.
-func (k *KeyRing) DerivePrivKey(keyDesc KeyDescriptor) (*btcec.PrivateKey,
+func (k *KeyRing) derivePrivKey(keyDesc KeyDescriptor) (*btcec.PrivateKey,
 	error) {
 
 	key, ok := k.accts[keyDesc.Family]
 	if !ok {
-		return nil, errors.New("DerivePrivKey failed: account not found")
+		return nil, errors.New("derivePrivKey failed: account not found")
 	}
 
 	privKey, err := key.extXPriv.DeriveNonStandard(keyDesc.Index)
@@ -299,7 +298,7 @@ func (k *KeyRing) DerivePrivKey(keyDesc KeyDescriptor) (*btcec.PrivateKey,
 		}
 
 		if !keyDesc.PubKey.IsEqual(pubKey) {
-			return nil, errors.New("DerivePrivKey failed: unsupported scan requested")
+			return nil, errors.New("derivePrivKey failed: unsupported scan requested")
 		}
 	}
 
@@ -316,7 +315,7 @@ func (k *KeyRing) DerivePrivKey(keyDesc KeyDescriptor) (*btcec.PrivateKey,
 func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 	error) {
 
-	privKey, err := k.DerivePrivKey(keyDesc)
+	privKey, err := k.derivePrivKey(keyDesc)
 	if err != nil {
 		return [32]byte{}, err
 	}
@@ -340,7 +339,7 @@ func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 func (k *KeyRing) SignMessage(keyLoc KeyLocator, msg []byte, doubleHash bool) (
 	*ecdsa.Signature, error) {
 
-	privKey, err := k.DerivePrivKey(KeyDescriptor{
+	privKey, err := k.derivePrivKey(KeyDescriptor{
 		KeyLocator: keyLoc,
 	})
 	if err != nil {
@@ -362,7 +361,7 @@ func (k *KeyRing) SignMessage(keyLoc KeyLocator, msg []byte, doubleHash bool) (
 func (k *KeyRing) SignMessageCompact(keyLoc KeyLocator, msg []byte,
 	doubleHash bool) ([]byte, error) {
 
-	privKey, err := k.DerivePrivKey(KeyDescriptor{
+	privKey, err := k.derivePrivKey(KeyDescriptor{
 		KeyLocator: keyLoc,
 	})
 	if err != nil {
@@ -383,7 +382,7 @@ func (k *KeyRing) SignMessageCompact(keyLoc KeyLocator, msg []byte,
 // and the optional Taproot tweak applied to the private key.
 func (k *KeyRing) SignMessageSchnorr(keyLoc KeyLocator, msg []byte,
 	doubleHash bool, taprootTweak []byte) (*schnorr.Signature, error) {
-	privKey, err := k.DerivePrivKey(KeyDescriptor{
+	privKey, err := k.derivePrivKey(KeyDescriptor{
 		KeyLocator: keyLoc,
 	})
 	if err != nil {
@@ -455,7 +454,7 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 		derivationInfo := in.Bip32Derivation[0]
 		privKey, err := k.deriveKeyByBIP32Path(derivationInfo.Bip32Path)
 		if err != nil {
-			signerLog.Warnf("SignPsbt: Skipping input %d, error "+
+			log.Warnf("SignPsbt: Skipping input %d, error "+
 				"deriving signing key: %v", idx, err)
 			continue
 		}
@@ -467,7 +466,7 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 			privKey.PubKey().SerializeCompressed(),
 		)
 		if !pubKeysEqual {
-			signerLog.Warnf("SignPsbt: Skipping input %d, derived "+
+			log.Warnf("SignPsbt: Skipping input %d, derived "+
 				"public key %x does not match bip32 "+
 				"derivation info public key %x", idx,
 				privKey.PubKey().SerializeCompressed(),
@@ -488,25 +487,25 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 
 		switch signMethod {
 		// For p2wkh, np2wkh and p2wsh.
-		case WitnessV0SignMethod:
+		case witnessV0SignMethod:
 			err = signSegWitV0(in, tx, sigHashes, idx, privKey)
 
 		// For p2tr BIP0086 key spend only.
-		case TaprootKeySpendBIP0086SignMethod:
+		case taprootKeySpendBIP0086SignMethod:
 			rootHash := make([]byte, 0)
 			err = signSegWitV1KeySpend(
 				in, tx, sigHashes, idx, privKey, rootHash,
 			)
 
 		// For p2tr with script commitment key spend path.
-		case TaprootKeySpendSignMethod:
+		case taprootKeySpendSignMethod:
 			rootHash := in.TaprootMerkleRoot
 			err = signSegWitV1KeySpend(
 				in, tx, sigHashes, idx, privKey, rootHash,
 			)
 
 		// For p2tr script spend path.
-		case TaprootScriptSpendSignMethod:
+		case taprootScriptSpendSignMethod:
 			leafScript := in.TaprootLeafScript[0]
 			leaf := txscript.TapLeaf{
 				LeafVersion: leafScript.LeafVersion,
@@ -575,7 +574,7 @@ func (k *KeyRing) deriveKeyByBIP32Path(path []uint32) (*btcec.PrivateKey,
 		return nil, fmt.Errorf("change addresses not supported")
 	}
 
-	return k.DerivePrivKey(KeyDescriptor{
+	return k.derivePrivKey(KeyDescriptor{
 		KeyLocator: KeyLocator{
 			Family: account,
 			Index:  index,
@@ -765,15 +764,15 @@ func maybeTweakPrivKeyPsbt(unknowns []*psbt.Unknown,
 	// ever be applied (at least for any use cases described in the BOLT
 	// spec).
 	for _, u := range unknowns {
-		if bytes.Equal(u.Key, PsbtKeyTypeInputSignatureTweakSingle) {
-			return TweakPrivKey(privKey, u.Value)
+		if bytes.Equal(u.Key, psbtKeyTypeInputSignatureTweakSingle) {
+			return tweakPrivKey(privKey, u.Value)
 		}
 
-		if bytes.Equal(u.Key, PsbtKeyTypeInputSignatureTweakDouble) {
+		if bytes.Equal(u.Key, psbtKeyTypeInputSignatureTweakDouble) {
 			doubleTweakKey, _ := btcec.PrivKeyFromBytes(
 				u.Value,
 			)
-			return DeriveRevocationPrivKey(
+			return deriveRevocationPrivKey(
 				privKey, doubleTweakKey,
 			)
 		}
@@ -782,7 +781,7 @@ func maybeTweakPrivKeyPsbt(unknowns []*psbt.Unknown,
 	return privKey
 }
 
-// TweakPrivKey tweaks the private key of a public base point given a per
+// tweakPrivKey tweaks the private key of a public base point given a per
 // commitment point. The per commitment secret is the revealed revocation
 // secret for the commitment state in question. This private key will only need
 // to be generated in the case that a channel counter party broadcasts a
@@ -792,7 +791,7 @@ func maybeTweakPrivKeyPsbt(unknowns []*psbt.Unknown,
 //   - tweakPriv := basePriv + sha256(commitment || basePub) mod N
 //
 // Where N is the order of the sub-group.
-func TweakPrivKey(basePriv *btcec.PrivateKey,
+func tweakPrivKey(basePriv *btcec.PrivateKey,
 	commitTweak []byte) *btcec.PrivateKey {
 
 	// tweakInt := sha256(commitPoint || basePub)
@@ -804,22 +803,21 @@ func TweakPrivKey(basePriv *btcec.PrivateKey,
 	return &btcec.PrivateKey{Key: *tweakScalar}
 }
 
-// SingleTweakBytes computes set of bytes we call the single tweak. The purpose
+// singleTweakBytes computes set of bytes we call the single tweak. The purpose
 // of the single tweak is to randomize all regular delay and payment base
 // points. To do this, we generate a hash that binds the commitment point to
 // the pay/delay base point. The end end results is that the basePoint is
 // tweaked as follows:
 //
 //   - key = basePoint + sha256(commitPoint || basePoint)*G
-func SingleTweakBytes(commitPoint, basePoint *btcec.PublicKey) []byte {
+func singleTweakBytes(commitPoint, basePoint *btcec.PublicKey) []byte {
 	h := sha256.New()
 	h.Write(commitPoint.SerializeCompressed())
 	h.Write(basePoint.SerializeCompressed())
 	return h.Sum(nil)
 }
 
-// TweakPubKey tweaks a public base point given a per commitment point. The per
-// DeriveRevocationPrivKey derives the revocation private key given a node's
+// deriveRevocationPrivKey derives the revocation private key given a node's
 // commitment private key, and the preimage to a previously seen revocation
 // hash. Using this derived private key, a node is able to claim the output
 // within the commitment transaction of a node in the case that they broadcast
@@ -831,18 +829,18 @@ func SingleTweakBytes(commitPoint, basePoint *btcec.PublicKey) []byte {
 //	              (commitSecret * sha256(commitPoint || revocationBase)) mod N
 //
 // Where N is the order of the sub-group.
-func DeriveRevocationPrivKey(revokeBasePriv *btcec.PrivateKey,
+func deriveRevocationPrivKey(revokeBasePriv *btcec.PrivateKey,
 	commitSecret *btcec.PrivateKey) *btcec.PrivateKey {
 
 	// r = sha256(revokeBasePub || commitPoint)
-	revokeTweakBytes := SingleTweakBytes(
+	revokeTweakBytes := singleTweakBytes(
 		revokeBasePriv.PubKey(), commitSecret.PubKey(),
 	)
 	revokeTweakScalar := new(btcec.ModNScalar)
 	revokeTweakScalar.SetByteSlice(revokeTweakBytes)
 
 	// c = sha256(commitPoint || revokeBasePub)
-	commitTweakBytes := SingleTweakBytes(
+	commitTweakBytes := singleTweakBytes(
 		commitSecret.PubKey(), revokeBasePriv.PubKey(),
 	)
 	commitTweakScalar := new(btcec.ModNScalar)
@@ -868,7 +866,7 @@ func DeriveRevocationPrivKey(revokeBasePriv *btcec.PrivateKey,
 // validateSigningMethod attempts to detect the signing method that is required
 // to sign for the given PSBT input and makes sure all information is available
 // to do so.
-func validateSigningMethod(in *psbt.PInput) (SignMethod, error) {
+func validateSigningMethod(in *psbt.PInput) (signMethod, error) {
 	script, err := txscript.ParsePkScript(in.WitnessUtxo.PkScript)
 	if err != nil {
 		return 0, fmt.Errorf("error detecting signing method, "+
@@ -879,7 +877,7 @@ func validateSigningMethod(in *psbt.PInput) (SignMethod, error) {
 	case txscript.WitnessV0PubKeyHashTy, txscript.ScriptHashTy,
 		txscript.WitnessV0ScriptHashTy:
 
-		return WitnessV0SignMethod, nil
+		return witnessV0SignMethod, nil
 
 	case txscript.WitnessV1TaprootTy:
 		if len(in.TaprootBip32Derivation) == 0 {
@@ -902,7 +900,7 @@ func validateSigningMethod(in *psbt.PInput) (SignMethod, error) {
 		case len(derivation.LeafHashes) == 0 &&
 			len(in.TaprootMerkleRoot) == 0:
 
-			return TaprootKeySpendBIP0086SignMethod, nil
+			return taprootKeySpendBIP0086SignMethod, nil
 
 		// A non-empty merkle root means we committed to a taproot hash
 		// that we need to use in the tap tweak.
@@ -915,7 +913,7 @@ func validateSigningMethod(in *psbt.PInput) (SignMethod, error) {
 					len(in.TaprootMerkleRoot), sha256.Size)
 			}
 
-			return TaprootKeySpendSignMethod, nil
+			return taprootKeySpendSignMethod, nil
 
 		// Currently, we only support signing for one leaf at a time.
 		case len(derivation.LeafHashes) == 1:
@@ -941,7 +939,7 @@ func validateSigningMethod(in *psbt.PInput) (SignMethod, error) {
 					"was not found")
 			}
 
-			return TaprootScriptSpendSignMethod, nil
+			return taprootScriptSpendSignMethod, nil
 
 		default:
 			return 0, fmt.Errorf("unsupported number of leaf " +
@@ -1027,12 +1025,12 @@ func (k *KeyRing) ListAccounts() []byte {
 		acctList += "        }"
 	}
 
-	for _, acctInfo := range DefaultPurposes {
-		account := k.defaultAccts[acctInfo.Purpose]
+	for _, acctInfo := range defaultPurposes {
+		account := k.defaultAccts[acctInfo.purpose]
 
-		strPurpose := fmt.Sprintf("%d", acctInfo.Purpose)
+		strPurpose := fmt.Sprintf("%d", acctInfo.purpose)
 
-		listAccount(0, account, acctInfo.AddrType, strPurpose, "0")
+		listAccount(0, account, acctInfo.addrType, strPurpose, "0")
 
 		acctList += ",\n"
 	}

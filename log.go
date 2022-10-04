@@ -12,6 +12,7 @@ var (
 	backend     = btclog.NewBackend(os.Stdout)
 	signerLog   = backend.Logger("SIGNER")
 	txscriptLog = backend.Logger("TXSCRIPT")
+	keyringLog  = backend.Logger("KEYRING")
 )
 
 func setLogLevel(level string) error {

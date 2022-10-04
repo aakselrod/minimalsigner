@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aakselrod/minimalsigner/keyring"
 	"github.com/lightningnetwork/lnd/cert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -97,7 +98,7 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	keyRing, err := NewKeyRing(cfg.seed[:], &cfg.ActiveNetParams)
+	keyRing, err := keyring.NewKeyRing(cfg.seed[:], &cfg.ActiveNetParams)
 	if err != nil {
 		return mkErr("error creating keyring: %v", err)
 	}
