@@ -19,10 +19,10 @@ import (
 
 // maxAccts is the number of accounts/key families to create on initialization.
 const (
-	maxAcctID      = 255
-	bip0043purpose = 1017
+	maxAcctID = 255
 
-	NodeKeyAcct = 6
+	Bip0043purpose = 1017
+	NodeKeyAcct    = 6
 )
 
 // signMethod defines the different ways a signer can sign, given a specific
@@ -213,7 +213,7 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 
 	// Derive Lightning purpose.
 	rootKey, err = rootKey.DeriveNonStandard(
-		bip0043purpose + hdkeychain.HardenedKeyStart,
+		Bip0043purpose + hdkeychain.HardenedKeyStart,
 	)
 	if err != nil {
 		return nil, err
@@ -557,7 +557,7 @@ func (k *KeyRing) deriveKeyByBIP32Path(path []uint32) (*btcec.PrivateKey,
 
 	// Is this a custom lnd internal purpose key?
 	purpose := path[0] - hdkeychain.HardenedKeyStart
-	if purpose != bip0043purpose {
+	if purpose != Bip0043purpose {
 		return k.deriveKeyByDefaultBIP32Path(path)
 	}
 
