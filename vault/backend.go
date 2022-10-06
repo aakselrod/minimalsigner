@@ -47,6 +47,7 @@ POST - generate a new node seed and store it indexed by node pubkey
 
 func (b *backend) listNodes(ctx context.Context, req *logical.Request,
 	data *framework.FieldData) (*logical.Response, error) {
+
 	vals, err := req.Storage.List(ctx, "lnd-nodes/")
 	if err != nil {
 		b.Logger().Error("Failed to retrieve the list of nodes",
@@ -117,6 +118,8 @@ func (b *backend) createNode(ctx context.Context, req *logical.Request,
 			"error", err)
 		return nil, err
 	}
+
+	b.Logger().Info("Wrote new LND node seed", "pubkey", strPubKey)
 
 	return &logical.Response{
 		Data: map[string]interface{}{
@@ -228,6 +231,11 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 		},
 		Secrets:     []*framework.Secret{},
 		BackendType: logical.TypeLogical,
+	}
+
+	err := b.Setup(ctx, conf)
+	if err != nil {
+		return nil, err
 	}
 
 	return &b, nil
