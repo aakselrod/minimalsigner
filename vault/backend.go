@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/aakselrod/minimalsigner/keyring"
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -116,7 +117,14 @@ func (b *backend) derivePubKey(ctx context.Context, req *logical.Request,
 	}
 	defer zero(seed)
 
-	derivationPath := data.Get("path").([]uint32)
+	derivationPathInts := data.Get("path").([]int)
+	derivationPath, err := sliceIntToUint32(derivationPathInts)
+	if err != nil {
+		b.Logger().Error("Failed to parse derivation path",
+			"derivation_path", derivationPathInts, "error", err)
+		return nil, err
+	}
+
 	pubKey, err := derivePubKey(seed, net, derivationPath)
 	if err != nil {
 		b.Logger().Error("Failed to derive pubkey",
@@ -127,7 +135,7 @@ func (b *backend) derivePubKey(ctx context.Context, req *logical.Request,
 
 	pubKeyBytes, err := extKeyToPubBytes(pubKey)
 	if err != nil {
-		b.Logger().Error("Failed to serialize pubkey to hex",
+		b.Logger().Error("derivePubKey: Failed to get pubkey bytes",
 			"node", strNode, "derivation_path", derivationPath,
 			"error", err)
 		return nil, err
@@ -135,7 +143,7 @@ func (b *backend) derivePubKey(ctx context.Context, req *logical.Request,
 
 	return &logical.Response{
 		Data: map[string]interface{}{
-			"nodePubKey": hex.EncodeToString(pubKeyBytes),
+			"pubKey": hex.EncodeToString(pubKeyBytes),
 		},
 	}, nil
 }
@@ -153,7 +161,14 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 	}
 	defer zero(seed)
 
-	derivationPath := data.Get("path").([]uint32)
+	derivationPathInts := data.Get("path").([]int)
+	derivationPath, err := sliceIntToUint32(derivationPathInts)
+	if err != nil {
+		b.Logger().Error("Failed to parse derivation path",
+			"derivation_path", derivationPathInts, "error", err)
+		return nil, err
+	}
+
 	privKey, err := derivePrivKey(seed, net, derivationPath)
 	if err != nil {
 		b.Logger().Error("Failed to derive privkey",
@@ -174,7 +189,7 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 
 	pubKeyBytes, err := extKeyToPubBytes(privKey)
 	if err != nil {
-		b.Logger().Error("Failed to get pubkey bytes",
+		b.Logger().Error("deriveAndSign: Failed to get pubkey bytes",
 			"node", strNode, "derivation_path", derivationPath,
 			"error", err)
 		return nil, err
@@ -200,6 +215,11 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 	}
 
 	digest := data.Get("digest").(string)
+	if len(digest) != 64 {
+		b.Logger().Error("Digest is not hex-encoded 32-byte value")
+		return nil, errors.New("invalid digest")
+	}
+
 	digestBytes, err := hex.DecodeString(digest)
 	if err != nil {
 		b.Logger().Error("Failed to decode digest from hex",
@@ -261,6 +281,10 @@ func (b *backend) getNode(ctx context.Context, storage logical.Storage,
 	entry, err := storage.Get(ctx, nodePath)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	if entry == nil {
+		return nil, nil, errors.New("node not found")
 	}
 
 	if len(entry.Value) <= hdkeychain.RecommendedSeedLen {
@@ -326,7 +350,7 @@ func (b *backend) createNode(ctx context.Context, req *logical.Request,
 
 	pubKeyBytes, err := extKeyToPubBytes(nodePubKey)
 	if err != nil {
-		b.Logger().Error("Failed to serialize pubkey to hex",
+		b.Logger().Error("createNode: Failed to get pubkey bytes",
 			"error", err)
 		return nil, err
 	}
@@ -457,7 +481,6 @@ func derivePubKey(seed []byte, net *chaincfg.Params,
 	if err != nil {
 		return nil, err
 	}
-	defer privKey.Zero()
 
 	return privKey.Neuter()
 }
@@ -484,6 +507,28 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 	}
 
 	return &b, nil
+}
+
+// sliceIntToUint32 converts a derivation path that's a slice of int to a slice
+// of uint32 for use in deriving a key.
+func sliceIntToUint32(ints []int) ([]uint32, error) {
+	uints := make([]uint32, len(ints))
+
+	for idx := range ints {
+		if ints[idx] < 0 {
+			return nil, errors.New("negative derivation path " +
+				"element")
+		}
+
+		if ints[idx] > math.MaxUint32 {
+			return nil, errors.New("derivation path element > " +
+				"MaxUint32")
+		}
+
+		uints[idx] = uint32(ints[idx])
+	}
+
+	return uints, nil
 }
 
 // zero sets all bytes in the passed slice to zero.  This is used to
