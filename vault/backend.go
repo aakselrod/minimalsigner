@@ -3,6 +3,7 @@ package vault
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -46,6 +47,40 @@ POST - generate a new node seed and store it indexed by node pubkey
 						"'simnet', 'signet', or " +
 						"'regtest'",
 					Default: 1,
+				},
+			},
+		},
+		&framework.Path{
+			Pattern: "lnd-nodes/ecdh/?",
+			Callbacks: map[logical.Operation]framework.OperationFunc{
+				logical.UpdateOperation: b.ecdh,
+				logical.CreateOperation: b.ecdh,
+			},
+			HelpSynopsis: "ECDH derived privkey with peer pubkey",
+			HelpDescription: `
+
+POST - ECDH the privkey derived with the submitted path with the specified
+peer pubkey
+
+`,
+			Fields: map[string]*framework.FieldSchema{
+				"node": &framework.FieldSchema{
+					Type: framework.TypeString,
+					Description: "node pubkey, must be " +
+						"66 hex characters",
+					Default: "",
+				},
+				"path": &framework.FieldSchema{
+					Type: framework.TypeCommaIntSlice,
+					Description: "derivation path, with " +
+						"the first 3 elements " +
+						"being hardened",
+					Default: []int{},
+				},
+				"peer": &framework.FieldSchema{
+					Type:        framework.TypeString,
+					Description: "pubkey for ECDH peer",
+					Default:     "",
 				},
 			},
 		},
@@ -102,6 +137,84 @@ the submitted path
 			},
 		},
 	}
+}
+
+func (b *backend) ecdh(ctx context.Context, req *logical.Request,
+	data *framework.FieldData) (*logical.Response, error) {
+
+	peerPubHex := data.Get("peer").(string)
+	if len(peerPubHex) != 2*btcec.PubKeyBytesLenCompressed {
+		b.Logger().Error("Peer pubkey is wrong length",
+			"node", peerPubHex)
+		return nil, errors.New("invalid peer pubkey")
+	}
+
+	peerPubBytes, err := hex.DecodeString(peerPubHex)
+	if err != nil {
+		b.Logger().Error("Failed to decode peer pubkey hex",
+			"error", err)
+		return nil, err
+	}
+
+	peerPubKey, err := btcec.ParsePubKey(peerPubBytes)
+	if err != nil {
+		b.Logger().Error("Failed to parse peer pubkey",
+			"error", err)
+		return nil, err
+	}
+
+	var (
+		pubJacobian btcec.JacobianPoint
+		s           btcec.JacobianPoint
+	)
+	peerPubKey.AsJacobian(&pubJacobian)
+
+	strNode := data.Get("node").(string)
+
+	seed, net, err := b.getNode(ctx, req.Storage, strNode)
+	if err != nil {
+		b.Logger().Error("Failed to retrieve node info",
+			"node", strNode, "error", err)
+		return nil, err
+	}
+	defer zero(seed)
+
+	derivationPathInts := data.Get("path").([]int)
+	derivationPath, err := sliceIntToUint32(derivationPathInts)
+	if err != nil {
+		b.Logger().Error("Failed to parse derivation path",
+			"derivation_path", derivationPathInts, "error", err)
+		return nil, err
+	}
+
+	privKey, err := derivePrivKey(seed, net, derivationPath)
+	if err != nil {
+		b.Logger().Error("Failed to derive privkey",
+			"node", strNode, "derivation_path", derivationPath,
+			"error", err)
+		return nil, err
+	}
+	defer privKey.Zero()
+
+	ecPrivKey, err := privKey.ECPrivKey()
+	if err != nil {
+		b.Logger().Error("Failed to derive valid ECDSA privkey",
+			"node", strNode, "derivation_path", derivationPath,
+			"error", err)
+		return nil, err
+	}
+	defer ecPrivKey.Zero()
+
+	btcec.ScalarMultNonConst(&ecPrivKey.Key, &pubJacobian, &s)
+	s.ToAffine()
+	sPubKey := btcec.NewPublicKey(&s.X, &s.Y)
+	h := sha256.Sum256(sPubKey.SerializeCompressed())
+
+	return &logical.Response{
+		Data: map[string]interface{}{
+			"sharedKey": hex.EncodeToString(h[:]),
+		},
+	}, nil
 }
 
 func (b *backend) derivePubKey(ctx context.Context, req *logical.Request,
