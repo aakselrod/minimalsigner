@@ -17,9 +17,10 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
-// maxAccts is the number of accounts/key families to create on initialization.
 const (
-	maxAcctID = 255
+	// MaxAcctID is the number of accounts/key families to create on
+	// initialization.
+	MaxAcctID = 255
 
 	Bip0043purpose = 1017
 	NodeKeyAcct    = 6
@@ -63,7 +64,7 @@ var (
 	// "do", short for "double".
 	psbtKeyTypeInputSignatureTweakDouble = []byte{0xd0}
 
-	// DefaultPurposes is a list of non-LN(1017) purposes for which we
+	// defaultPurposes is a list of non-LN(1017) purposes for which we
 	// should create a m/purpose'/0'/0' account as well as their default
 	// address types.
 	defaultPurposes = []struct {
@@ -228,7 +229,7 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 	}
 
 	// Populate Lightning-related families/accounts.
-	for i := uint32(0); i <= maxAcctID; i++ {
+	for i := uint32(0); i <= MaxAcctID; i++ {
 		// Derive family/account.
 		subKey, err := rootKey.DeriveNonStandard(
 			i + hdkeychain.HardenedKeyStart,
@@ -1039,13 +1040,13 @@ func (k *KeyRing) ListAccounts() []byte {
 
 	strCoin := fmt.Sprintf("%d", k.coin)
 
-	for act := uint32(0); act <= maxAcctID; act++ {
+	for act := uint32(0); act <= MaxAcctID; act++ {
 		account := k.accts[act]
 
 		listAccount(act, account, "WITNESS_PUBKEY_HASH", "1017",
 			strCoin)
 
-		if act < maxAcctID {
+		if act < MaxAcctID {
 			acctList += ","
 		}
 		acctList += "\n"

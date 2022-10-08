@@ -19,6 +19,42 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
+var (
+	// defaultPurposes is a list of non-LN(1017) purposes for which we
+	// should create a m/purpose'/0'/0' account as well as their default
+	// address types.
+	defaultPurposes = []struct {
+		purpose   uint32
+		addrType  string
+		hdVersion [2][4]byte
+	}{
+		{
+			purpose:  49,
+			addrType: "HYBRID_NESTED_WITNESS_PUBKEY_HASH",
+			hdVersion: [2][4]byte{
+				[4]byte{0x04, 0x9d, 0x7c, 0xb2}, // ypub
+				[4]byte{0x04, 0x4a, 0x52, 0x62}, // upub
+			},
+		},
+		{
+			purpose:  84,
+			addrType: "WITNESS_PUBKEY_HASH",
+			hdVersion: [2][4]byte{
+				[4]byte{0x04, 0xb2, 0x47, 0x46}, // zpub
+				[4]byte{0x04, 0x5f, 0x1c, 0xf6}, // vpub
+			},
+		},
+		{
+			purpose:  86,
+			addrType: "TAPROOT_PUBKEY",
+			hdVersion: [2][4]byte{
+				[4]byte{0x04, 0x88, 0xb2, 0x1e}, // xpub
+				[4]byte{0x04, 0x35, 0x87, 0xcf}, // tpub
+			},
+		},
+	}
+)
+
 type backend struct {
 	*framework.Backend
 }
@@ -51,6 +87,28 @@ POST - generate a new node seed and store it indexed by node pubkey
 			},
 		},
 		&framework.Path{
+			Pattern: "lnd-nodes/accounts/?",
+			Callbacks: map[logical.Operation]framework.OperationFunc{
+				logical.ReadOperation: b.listAccounts,
+			},
+			HelpSynopsis: "List accounts for import into LND " +
+				"watch-only node",
+			HelpDescription: `
+
+GET - list all node accounts in JSON format suitable for import into watch-
+only LND
+
+`,
+			Fields: map[string]*framework.FieldSchema{
+				"node": &framework.FieldSchema{
+					Type: framework.TypeString,
+					Description: "node pubkey, must be " +
+						"66 hex characters",
+					Default: "",
+				},
+			},
+		},
+		&framework.Path{
 			Pattern: "lnd-nodes/ecdh/?",
 			Callbacks: map[logical.Operation]framework.OperationFunc{
 				logical.UpdateOperation: b.ecdh,
@@ -78,9 +136,10 @@ peer pubkey
 					Default: []int{},
 				},
 				"peer": &framework.FieldSchema{
-					Type:        framework.TypeString,
-					Description: "pubkey for ECDH peer",
-					Default:     "",
+					Type: framework.TypeString,
+					Description: "pubkey for ECDH peer, " +
+						"must be 66 hex characters",
+					Default: "",
 				},
 			},
 		},
@@ -137,6 +196,158 @@ the submitted path
 			},
 		},
 	}
+}
+
+func (b *backend) listAccounts(ctx context.Context, req *logical.Request,
+	data *framework.FieldData) (*logical.Response, error) {
+
+	strNode := data.Get("node").(string)
+
+	seed, net, err := b.getNode(ctx, req.Storage, strNode)
+	if err != nil {
+		b.Logger().Error("Failed to retrieve node info",
+			"node", strNode, "error", err)
+		return nil, err
+	}
+	defer zero(seed)
+
+	rootKey, err := hdkeychain.NewMaster(seed, net)
+	if err != nil {
+		return nil, err
+	}
+	defer rootKey.Zero()
+
+	acctList := "{\n    \"accounts\": [\n"
+
+	listAccount := func(purpose, coin, act uint32, addrType string,
+		version []byte) (string, error) {
+
+		strListing := ""
+
+		// Derive purpose.
+		purposeKey, err := rootKey.DeriveNonStandard(
+			purpose + hdkeychain.HardenedKeyStart,
+		)
+		if err != nil {
+			return "", err
+		}
+		defer purposeKey.Zero()
+
+		// Derive coin.
+		coinKey, err := purposeKey.DeriveNonStandard(
+			coin + hdkeychain.HardenedKeyStart,
+		)
+		if err != nil {
+			return "", err
+		}
+		defer coinKey.Zero()
+
+		// Derive account.
+		actKey, err := coinKey.DeriveNonStandard(
+			act + hdkeychain.HardenedKeyStart,
+		)
+		if err != nil {
+			return "", err
+		}
+		defer actKey.Zero()
+
+		// Get account watch-only pubkey.
+		xPub, err := actKey.Neuter()
+		if err != nil {
+			return "", err
+		}
+
+		// Ensure we get the right HDVersion for the account key.
+		if version != nil {
+			xPub, err = xPub.CloneWithVersion(version)
+			if err != nil {
+				return "", err
+			}
+		}
+
+		strPurpose := fmt.Sprintf("%d", purpose)
+		strCoin := fmt.Sprintf("%d", coin)
+		strAct := fmt.Sprintf("%d", act)
+
+		strListing += "        {\n"
+
+		strListing += "            \"name\": \""
+		if act == 0 {
+			strListing += "default"
+		} else {
+			strListing += "act:" + strAct
+		}
+		strListing += "\",\n"
+
+		strListing += "            \"address_type\": \"" + addrType +
+			"\",\n"
+
+		strListing += "            \"extended_public_key\": \"" +
+			xPub.String() + "\",\n"
+
+		strListing += "            \"master_key_fingerprint\": null,\n"
+
+		strListing += "            \"derivation_path\": \"m/" +
+			strPurpose + "'/" + strCoin + "'/" + strAct + "'\",\n"
+
+		strListing += "            \"external_key_count\": 0,\n"
+
+		strListing += "            \"internal_key_count\": 0,\n"
+
+		strListing += "            \"watch_only\": false\n"
+
+		strListing += "        }"
+
+		return strListing, nil
+	}
+
+	for _, acctInfo := range defaultPurposes {
+		strListing, err := listAccount(
+			acctInfo.purpose,
+			0,
+			0,
+			acctInfo.addrType,
+			acctInfo.hdVersion[net.HDCoinType][:],
+		)
+		if err != nil {
+			b.Logger().Error("Failed to derive default account",
+				"node", strNode, "err", err)
+			return nil, err
+		}
+
+		acctList += strListing + ",\n"
+	}
+
+	for act := uint32(0); act <= keyring.MaxAcctID; act++ {
+		strListing, err := listAccount(
+			keyring.Bip0043purpose,
+			net.HDCoinType,
+			act,
+			"WITNESS_PUBKEY_HASH",
+			nil,
+		)
+		if err != nil {
+			b.Logger().Error("Failed to derive Lightning account",
+				"node", strNode, "err", err)
+			return nil, err
+		}
+
+		acctList += strListing
+
+		if act < keyring.MaxAcctID {
+			acctList += ","
+		}
+
+		acctList += "\n"
+	}
+
+	acctList += "    ]\n}"
+
+	return &logical.Response{
+		Data: map[string]interface{}{
+			"acctList": acctList,
+		},
+	}, nil
 }
 
 func (b *backend) ecdh(ctx context.Context, req *logical.Request,
@@ -261,6 +472,7 @@ func (b *backend) derivePubKey(ctx context.Context, req *logical.Request,
 	}, nil
 }
 
+// TODO(aakselrod): add support for taproot key tweaks.
 func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 	data *framework.FieldData) (*logical.Response, error) {
 
