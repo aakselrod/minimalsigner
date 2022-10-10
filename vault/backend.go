@@ -377,6 +377,7 @@ func (b *backend) listAccounts(ctx context.Context, req *logical.Request,
 	}, nil
 }
 
+// TODO(aakselrod): do derivation check against optional pubkey before ECDH.
 func (b *backend) ecdh(ctx context.Context, req *logical.Request,
 	data *framework.FieldData) (*logical.Response, error) {
 
@@ -728,6 +729,7 @@ func (b *backend) listNodes(ctx context.Context, req *logical.Request,
 		return nil, err
 	}
 
+	// TODO(aakselrod): return coin type for each node.
 	return logical.ListResponse(vals), nil
 }
 

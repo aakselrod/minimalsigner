@@ -99,13 +99,11 @@ type Config struct {
 
 	DebugLevel string `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical}"`
 
-	MainNet         bool     `long:"mainnet" description:"Use the main network"`
-	TestNet3        bool     `long:"testnet" description:"Use the test network"`
-	SimNet          bool     `long:"simnet" description:"Use the simulation test network"`
-	RegTest         bool     `long:"regtest" description:"Use the regression test network"`
-	SigNet          bool     `long:"signet" description:"Use the signet test network"`
-	SigNetChallenge string   `long:"signetchallenge" description:"Connect to a custom signet network defined by this challenge instead of using the global default signet test network -- Can be specified multiple times"`
-	SigNetSeedNode  []string `long:"signetseednode" description:"Specify a seed node for the signet network instead of using the global default signet network seed nodes"`
+	MainNet  bool `long:"mainnet" description:"NOT RECOMMENDED: Use the main network"`
+	TestNet3 bool `long:"testnet" description:"Use the test network"`
+	SimNet   bool `long:"simnet" description:"Use the simulation test network"`
+	RegTest  bool `long:"regtest" description:"Use the regression test network"`
+	SigNet   bool `long:"signet" description:"Use the signet test network"`
 
 	// ActiveNetParams contains parameters of the target chain.
 	ActiveNetParams chaincfg.Params
@@ -320,41 +318,6 @@ func ValidateConfig(cfg Config, fileParser, flagParser *flags.Parser) (
 	if cfg.SigNet {
 		numNets++
 		cfg.ActiveNetParams = chaincfg.SigNetParams
-
-		// Let the user overwrite the default signet parameters.
-		// The challenge defines the actual signet network to
-		// join and the seed nodes are needed for network
-		// discovery.
-		sigNetChallenge := chaincfg.DefaultSignetChallenge
-		sigNetSeeds := chaincfg.DefaultSignetDNSSeeds
-		if cfg.SigNetChallenge != "" {
-			challenge, err := hex.DecodeString(
-				cfg.SigNetChallenge,
-			)
-			if err != nil {
-				return nil, mkErr("Invalid "+
-					"signet challenge, hex decode "+
-					"failed: %v", err)
-			}
-			sigNetChallenge = challenge
-		}
-
-		if len(cfg.SigNetSeedNode) > 0 {
-			sigNetSeeds = make([]chaincfg.DNSSeed, len(
-				cfg.SigNetSeedNode,
-			))
-			for idx, seed := range cfg.SigNetSeedNode {
-				sigNetSeeds[idx] = chaincfg.DNSSeed{
-					Host:         seed,
-					HasFiltering: false,
-				}
-			}
-		}
-
-		chainParams := chaincfg.CustomSignetParams(
-			sigNetChallenge, sigNetSeeds,
-		)
-		cfg.ActiveNetParams = chainParams
 	}
 	if numNets > 1 {
 		str := "The mainnet, testnet, regtest, and simnet " +

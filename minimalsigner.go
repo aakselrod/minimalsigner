@@ -14,11 +14,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aakselrod/minimalsigner/keyring"
+	"github.com/hashicorp/vault/api"
 	"github.com/lightningnetwork/lnd/cert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"gopkg.in/macaroon-bakery.v2/bakery"
+	"gopkg.in/macaroon-bakery.v2/bakery/checkers"
 )
 
 const (
@@ -76,9 +77,6 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 	case cfg.TestNet3:
 		network = "testnet"
 
-	case cfg.MainNet:
-		network = "mainnet"
-
 	case cfg.SimNet:
 		network = "simnet"
 
@@ -87,31 +85,59 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 
 	case cfg.SigNet:
 		network = "signet"
+
+	case cfg.MainNet:
+		network = "mainnet"
 	}
 
-	signerLog.Infof("Active chain: %v (network=%v)",
-		"bitcoin",
-		network,
-	)
+	signerLog.Infof("Active chain: %v (network=%v)", "bitcoin", network)
 
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	keyRing, err := keyring.NewKeyRing(cfg.seed[:], &cfg.ActiveNetParams)
+	// Use defaults for vault client, including getting config from env.
+	vaultClient, err := api.NewClient(nil)
 	if err != nil {
-		return mkErr("error creating keyring: %v", err)
+		return mkErr("error creating vault client: %v", err)
+	}
+
+	signerClient := vaultClient.Logical()
+
+	nodeListResp, err := signerClient.List("minimalsigner/lnd-nodes")
+	if err != nil {
+		return mkErr("error getting list of lnd nodes: %v", err)
 	}
 
 	// If we're asked to output a watch-only account list, do it here.
 	if cfg.OutputAccounts != "" {
-		err = os.WriteFile(
-			cfg.OutputAccounts,
-			keyRing.ListAccounts(),
-			outputFilePermissions,
-		)
-		if err != nil {
-			return mkErr("error writing account list: %v", err)
+		for node := range nodeListResp.Data {
+			listAcctsResp, err := signerClient.ReadWithData(
+				"minimalsigner/lnd-nodes/accounts",
+				map[string][]string{
+					"node": []string{node},
+				},
+			)
+			if err != nil {
+				return mkErr("error listing accounts for "+
+					"node %s: %v", node, err)
+			}
+
+			acctList, ok := listAcctsResp.Data["acctList"]
+			if !ok {
+				return mkErr("accounts not returned for "+
+					"node %s", node)
+			}
+
+			err = os.WriteFile(
+				cfg.OutputAccounts+"."+node,
+				[]byte(acctList.(string)),
+				outputFilePermissions,
+			)
+			if err != nil {
+				return mkErr("error writing account list: %v",
+					err)
+			}
 		}
 	}
 
@@ -129,26 +155,36 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 
 	// If we're asked to output a macaroon file, do it here.
 	if cfg.OutputMacaroon != "" {
-		mac, err := bkry.Oven.NewMacaroon(
-			ctx, bakery.LatestVersion, nil, nodePermissions...,
-		)
-		if err != nil {
-			return mkErr("error baking macaroon: %v", err)
-		}
+		for node := range nodeListResp.Data {
+			caveat := checkers.Caveat{
+				Condition: checkers.Condition("node", node),
+			}
 
-		macBytes, err := mac.M().MarshalBinary()
-		if err != nil {
-			return mkErr("error marshaling macaroon binary: %v",
-				err)
-		}
+			mac, err := bkry.Oven.NewMacaroon(
+				ctx,
+				bakery.LatestVersion,
+				[]checkers.Caveat{caveat},
+				nodePermissions...,
+			)
+			if err != nil {
+				return mkErr("error baking macaroon: %v", err)
+			}
 
-		err = os.WriteFile(
-			cfg.OutputMacaroon,
-			macBytes,
-			outputFilePermissions,
-		)
-		if err != nil {
-			return mkErr("error writing account list: %v", err)
+			macBytes, err := mac.M().MarshalBinary()
+			if err != nil {
+				return mkErr("error marshaling macaroon "+
+					"binary: %v", err)
+			}
+
+			err = os.WriteFile(
+				cfg.OutputMacaroon+"."+node,
+				macBytes,
+				outputFilePermissions,
+			)
+			if err != nil {
+				return mkErr("error writing account list: %v",
+					err)
+			}
 		}
 	}
 
@@ -184,7 +220,7 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 
 	// Initialize the rpcServer and add its interceptor to the server
 	// options.
-	rpcServer := newRPCServer(cfg, keyRing, bkry.Checker)
+	rpcServer := newRPCServer(cfg, signerClient, bkry.Checker)
 	serverOpts = append(
 		serverOpts,
 		grpc.ChainUnaryInterceptor(rpcServer.intercept),

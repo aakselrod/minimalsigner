@@ -7,6 +7,7 @@ import (
 
 	"github.com/aakselrod/minimalsigner/keyring"
 	"github.com/aakselrod/minimalsigner/proto"
+	"github.com/hashicorp/vault/api"
 	"github.com/tv42/zbase32"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -54,7 +55,7 @@ type rpcServer struct {
 
 	perms map[string][]bakery.Op
 
-	keyRing *keyring.KeyRing
+	client *api.Logical
 
 	checker *bakery.Checker
 
@@ -68,12 +69,12 @@ var _ proto.LightningServer = (*rpcServer)(nil)
 // newRPCServer creates and returns a new instance of the rpcServer. Before
 // dependencies are added, this will be an non-functioning RPC server only to
 // be used to register the LightningService with the gRPC server.
-func newRPCServer(cfg *Config, k *keyring.KeyRing,
+func newRPCServer(cfg *Config, c *api.Logical,
 	checker *bakery.Checker) *rpcServer {
 
 	return &rpcServer{
 		cfg:     cfg,
-		keyRing: k,
+		client:  c,
 		checker: checker,
 		perms:   make(map[string][]bakery.Op),
 	}
@@ -216,8 +217,8 @@ func (r *rpcServer) SignMessage(_ context.Context,
 		Index:  0,
 	}
 
-	sigBytes, err := r.keyRing.SignMessageCompact(
-		keyLoc, in.Msg, !in.SingleHash,
+	sigBytes, err := r.keyRing.SignMessage(
+		keyLoc, in.Msg, !in.SingleHash, true,
 	)
 	if err != nil {
 		return nil, err

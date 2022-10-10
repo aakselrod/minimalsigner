@@ -89,8 +89,8 @@ func (s *signerServer) SignMessage(_ context.Context,
 	// also return the compact signature format instead of adding a flag to
 	// the proto.SignMessage call that removes the message prefix.
 	if in.CompactSig {
-		sigBytes, err := s.server.keyRing.SignMessageCompact(
-			keyLocator, in.Msg, in.DoubleHash,
+		sigBytes, err := s.server.keyRing.SignMessage(
+			keyLocator, in.Msg, in.DoubleHash, true,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("can't sign the hash: %v", err)
