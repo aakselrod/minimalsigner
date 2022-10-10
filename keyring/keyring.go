@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/aakselrod/minimalsigner/vault"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
@@ -15,15 +16,6 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
-)
-
-const (
-	// MaxAcctID is the number of accounts/key families to create on
-	// initialization.
-	MaxAcctID = 255
-
-	Bip0043purpose = 1017
-	NodeKeyAcct    = 6
 )
 
 // signMethod defines the different ways a signer can sign, given a specific
@@ -52,13 +44,13 @@ const (
 )
 
 var (
-	// PsbtKeyTypeInputSignatureTweakSingle is a custom/proprietary PSBT key
+	// psbtKeyTypeInputSignatureTweakSingle is a custom/proprietary PSBT key
 	// for an input that specifies what single tweak should be applied to
 	// the key before signing the input. The value 51 is leet speak for
 	// "si", short for "single".
 	psbtKeyTypeInputSignatureTweakSingle = []byte{0x51}
 
-	// PsbtKeyTypeInputSignatureTweakDouble is a custom/proprietary PSBT key
+	// psbtKeyTypeInputSignatureTweakDouble is a custom/proprietary PSBT key
 	// for an input that specifies what double tweak should be applied to
 	// the key before signing the input. The value d0 is leet speak for
 	// "do", short for "double".
@@ -214,7 +206,7 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 
 	// Derive Lightning purpose.
 	rootKey, err = rootKey.DeriveNonStandard(
-		Bip0043purpose + hdkeychain.HardenedKeyStart,
+		vault.Bip0043purpose + hdkeychain.HardenedKeyStart,
 	)
 	if err != nil {
 		return nil, err
@@ -229,7 +221,7 @@ func NewKeyRing(seed []byte, net *chaincfg.Params) (*KeyRing, error) {
 	}
 
 	// Populate Lightning-related families/accounts.
-	for i := uint32(0); i <= MaxAcctID; i++ {
+	for i := uint32(0); i <= vault.MaxAcctID; i++ {
 		// Derive family/account.
 		subKey, err := rootKey.DeriveNonStandard(
 			i + hdkeychain.HardenedKeyStart,
@@ -558,7 +550,7 @@ func (k *KeyRing) deriveKeyByBIP32Path(path []uint32) (*btcec.PrivateKey,
 
 	// Is this a custom lnd internal purpose key?
 	purpose := path[0] - hdkeychain.HardenedKeyStart
-	if purpose != Bip0043purpose {
+	if purpose != vault.Bip0043purpose {
 		return k.deriveKeyByDefaultBIP32Path(path)
 	}
 
@@ -1040,13 +1032,13 @@ func (k *KeyRing) ListAccounts() []byte {
 
 	strCoin := fmt.Sprintf("%d", k.coin)
 
-	for act := uint32(0); act <= MaxAcctID; act++ {
+	for act := uint32(0); act <= vault.MaxAcctID; act++ {
 		account := k.accts[act]
 
 		listAccount(act, account, "WITNESS_PUBKEY_HASH", "1017",
 			strCoin)
 
-		if act < MaxAcctID {
+		if act < vault.MaxAcctID {
 			acctList += ","
 		}
 		acctList += "\n"

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/aakselrod/minimalsigner/keyring"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
@@ -17,6 +16,15 @@ import (
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
+)
+
+const (
+	// MaxAcctID is the number of accounts/key families to create on
+	// initialization.
+	MaxAcctID = 255
+
+	Bip0043purpose = 1017
+	NodeKeyAcct    = 6
 )
 
 var (
@@ -318,9 +326,9 @@ func (b *backend) listAccounts(ctx context.Context, req *logical.Request,
 		acctList += strListing + ",\n"
 	}
 
-	for act := uint32(0); act <= keyring.MaxAcctID; act++ {
+	for act := uint32(0); act <= MaxAcctID; act++ {
 		strListing, err := listAccount(
-			keyring.Bip0043purpose,
+			Bip0043purpose,
 			net.HDCoinType,
 			act,
 			"WITNESS_PUBKEY_HASH",
@@ -334,7 +342,7 @@ func (b *backend) listAccounts(ctx context.Context, req *logical.Request,
 
 		acctList += strListing
 
-		if act < keyring.MaxAcctID {
+		if act < MaxAcctID {
 			acctList += ","
 		}
 
@@ -661,9 +669,9 @@ func (b *backend) createNode(ctx context.Context, req *logical.Request,
 	}
 
 	nodePubKey, err := derivePubKey(seed, net, []uint32{
-		keyring.Bip0043purpose + hdkeychain.HardenedKeyStart,
+		Bip0043purpose + hdkeychain.HardenedKeyStart,
 		net.HDCoinType + hdkeychain.HardenedKeyStart,
-		keyring.NodeKeyAcct + hdkeychain.HardenedKeyStart,
+		NodeKeyAcct + hdkeychain.HardenedKeyStart,
 		0,
 		0,
 	})

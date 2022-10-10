@@ -6,6 +6,7 @@ import (
 
 	"github.com/aakselrod/minimalsigner/keyring"
 	"github.com/aakselrod/minimalsigner/proto"
+	"github.com/aakselrod/minimalsigner/vault"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"gopkg.in/macaroon-bakery.v2/bakery"
@@ -159,7 +160,7 @@ func (s *signerServer) DeriveSharedKey(_ context.Context,
 	// key.
 	if keyLoc == nil {
 		keyLoc = &proto.KeyLocator{
-			KeyFamily: int32(keyring.NodeKeyAcct),
+			KeyFamily: int32(vault.NodeKeyAcct),
 			KeyIndex:  0,
 		}
 	}
