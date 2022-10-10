@@ -14,6 +14,7 @@ import (
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
 )
@@ -199,6 +200,24 @@ the submitted path
 						"which to sign, checked " +
 						"against derived pubkey to " +
 						"ensure a match",
+					Default: "",
+				},
+				"taptweak": &framework.FieldSchema{
+					Type: framework.TypeString,
+					Description: "optional: hex-encoded " +
+						"taproot tweak",
+					Default: "",
+				},
+				"ln1tweak": &framework.FieldSchema{
+					Type: framework.TypeString,
+					Description: "optional: hex-encoded " +
+						"LN single commit tweak",
+					Default: "",
+				},
+				"ln2tweak": &framework.FieldSchema{
+					Type: framework.TypeString,
+					Description: "optional: hex-encoded " +
+						"LN double revocation tweak",
 					Default: "",
 				},
 			},
@@ -439,6 +458,14 @@ func (b *backend) ecdh(ctx context.Context, req *logical.Request,
 func (b *backend) derivePubKey(ctx context.Context, req *logical.Request,
 	data *framework.FieldData) (*logical.Response, error) {
 
+	derivationPathInts := data.Get("path").([]int)
+	derivationPath, err := sliceIntToUint32(derivationPathInts)
+	if err != nil {
+		b.Logger().Error("Failed to parse derivation path",
+			"derivation_path", derivationPathInts, "error", err)
+		return nil, err
+	}
+
 	strNode := data.Get("node").(string)
 
 	seed, net, err := b.getNode(ctx, req.Storage, strNode)
@@ -448,14 +475,6 @@ func (b *backend) derivePubKey(ctx context.Context, req *logical.Request,
 		return nil, err
 	}
 	defer zero(seed)
-
-	derivationPathInts := data.Get("path").([]int)
-	derivationPath, err := sliceIntToUint32(derivationPathInts)
-	if err != nil {
-		b.Logger().Error("Failed to parse derivation path",
-			"derivation_path", derivationPathInts, "error", err)
-		return nil, err
-	}
 
 	pubKey, err := derivePubKey(seed, net, derivationPath)
 	if err != nil {
@@ -480,9 +499,37 @@ func (b *backend) derivePubKey(ctx context.Context, req *logical.Request,
 	}, nil
 }
 
-// TODO(aakselrod): add support for taproot key tweaks.
 func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 	data *framework.FieldData) (*logical.Response, error) {
+
+	tapTweakHex := data.Get("taptweak").(string)
+	singleTweakHex := data.Get("ln1tweak").(string)
+	doubleTweakHex := data.Get("ln2tweak").(string)
+
+	numTweaks := int(0)
+
+	if len(tapTweakHex) > 0 {
+		numTweaks++
+	}
+	if len(singleTweakHex) > 0 {
+		numTweaks++
+	}
+	if len(doubleTweakHex) > 0 {
+		numTweaks++
+	}
+
+	if numTweaks > 1 {
+		b.Logger().Error("Too many tweaks requested; maximum of one")
+		return nil, errors.New("too many tweaks")
+	}
+
+	derivationPathInts := data.Get("path").([]int)
+	derivationPath, err := sliceIntToUint32(derivationPathInts)
+	if err != nil {
+		b.Logger().Error("Failed to parse derivation path",
+			"derivation_path", derivationPathInts, "error", err)
+		return nil, err
+	}
 
 	strNode := data.Get("node").(string)
 
@@ -493,14 +540,6 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 		return nil, err
 	}
 	defer zero(seed)
-
-	derivationPathInts := data.Get("path").([]int)
-	derivationPath, err := sliceIntToUint32(derivationPathInts)
-	if err != nil {
-		b.Logger().Error("Failed to parse derivation path",
-			"derivation_path", derivationPathInts, "error", err)
-		return nil, err
-	}
 
 	privKey, err := derivePrivKey(seed, net, derivationPath)
 	if err != nil {
@@ -547,6 +586,54 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 		}
 	}
 
+	signMethod := data.Get("method").(string)
+
+	switch {
+	// No tweaks if we aren't using Schnorr.
+	case signMethod != "schnorr":
+		break
+
+	// Taproot tweak as used by SignMessageSchnorr.
+	case len(tapTweakHex) > 0:
+		tapTweakBytes, err := hex.DecodeString(tapTweakHex)
+		if err != nil {
+			b.Logger().Error("Couldn't decode taptweak hex",
+				"error", err)
+			return nil, err
+		}
+
+		ecPrivKey = txscript.TweakTaprootPrivKey(
+			ecPrivKey,
+			tapTweakBytes,
+		)
+
+	// Single commitment tweak as used by SignPsbt.
+	case len(singleTweakHex) > 0:
+		singleTweakBytes, err := hex.DecodeString(singleTweakHex)
+		if err != nil {
+			b.Logger().Error("Couldn't decode ln1tweak hex",
+				"error", err)
+			return nil, err
+		}
+
+		ecPrivKey = tweakPrivKey(
+			ecPrivKey,
+			singleTweakBytes,
+		)
+
+	// Double revocation tweak as used by SignPsbt.
+	case len(doubleTweakHex) > 0:
+		doubleTweakBytes, err := hex.DecodeString(doubleTweakHex)
+		if err != nil {
+			b.Logger().Error("Couldn't decode ln2tweak hex",
+				"error", err)
+			return nil, err
+		}
+
+		doubleTweakKey, _ := btcec.PrivKeyFromBytes(doubleTweakBytes)
+		ecPrivKey = deriveRevocationPrivKey(ecPrivKey, doubleTweakKey)
+	}
+
 	digest := data.Get("digest").(string)
 	if len(digest) != 64 {
 		b.Logger().Error("Digest is not hex-encoded 32-byte value")
@@ -564,7 +651,6 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 
 	// TODO(aakselrod): check derivation paths are sane for the type of
 	// signature we're requesting.
-	signMethod := data.Get("method").(string)
 	switch signMethod {
 	case "ecdsa":
 		sigBytes = ecdsa.Sign(ecPrivKey, digestBytes).Serialize()
@@ -871,4 +957,86 @@ func zero(b []byte) {
 	for i := 0; i < lenb; i++ {
 		b[i] = 0
 	}
+}
+
+// tweakPrivKey tweaks the private key of a public base point given a per
+// commitment point. The per commitment secret is the revealed revocation
+// secret for the commitment state in question. This private key will only need
+// to be generated in the case that a channel counter party broadcasts a
+// revoked state. Precisely, the following operation is used to derive a
+// tweaked private key:
+//
+//   - tweakPriv := basePriv + sha256(commitment || basePub) mod N
+//
+// Where N is the order of the sub-group.
+func tweakPrivKey(basePriv *btcec.PrivateKey,
+	commitTweak []byte) *btcec.PrivateKey {
+
+	// tweakInt := sha256(commitPoint || basePub)
+	tweakScalar := new(btcec.ModNScalar)
+	tweakScalar.SetByteSlice(commitTweak)
+
+	tweakScalar.Add(&basePriv.Key)
+
+	return &btcec.PrivateKey{Key: *tweakScalar}
+}
+
+// singleTweakBytes computes set of bytes we call the single tweak. The purpose
+// of the single tweak is to randomize all regular delay and payment base
+// points. To do this, we generate a hash that binds the commitment point to
+// the pay/delay base point. The end end results is that the basePoint is
+// tweaked as follows:
+//
+//   - key = basePoint + sha256(commitPoint || basePoint)*G
+func singleTweakBytes(commitPoint, basePoint *btcec.PublicKey) []byte {
+	h := sha256.New()
+	h.Write(commitPoint.SerializeCompressed())
+	h.Write(basePoint.SerializeCompressed())
+	return h.Sum(nil)
+}
+
+// deriveRevocationPrivKey derives the revocation private key given a node's
+// commitment private key, and the preimage to a previously seen revocation
+// hash. Using this derived private key, a node is able to claim the output
+// within the commitment transaction of a node in the case that they broadcast
+// a previously revoked commitment transaction.
+//
+// The private key is derived as follows:
+//
+//	revokePriv := (revokeBasePriv * sha256(revocationBase || commitPoint)) +
+//	              (commitSecret * sha256(commitPoint || revocationBase)) mod N
+//
+// Where N is the order of the sub-group.
+func deriveRevocationPrivKey(revokeBasePriv *btcec.PrivateKey,
+	commitSecret *btcec.PrivateKey) *btcec.PrivateKey {
+
+	// r = sha256(revokeBasePub || commitPoint)
+	revokeTweakBytes := singleTweakBytes(
+		revokeBasePriv.PubKey(), commitSecret.PubKey(),
+	)
+	revokeTweakScalar := new(btcec.ModNScalar)
+	revokeTweakScalar.SetByteSlice(revokeTweakBytes)
+
+	// c = sha256(commitPoint || revokeBasePub)
+	commitTweakBytes := singleTweakBytes(
+		commitSecret.PubKey(), revokeBasePriv.PubKey(),
+	)
+	commitTweakScalar := new(btcec.ModNScalar)
+	commitTweakScalar.SetByteSlice(commitTweakBytes)
+
+	// Finally to derive the revocation secret key we'll perform the
+	// following operation:
+	//
+	//  k = (revocationPriv * r) + (commitSecret * c) mod N
+	//
+	// This works since:
+	//  P = (G*a)*b + (G*c)*d
+	//  P = G*(a*b) + G*(c*d)
+	//  P = G*(a*b + c*d)
+	revokeHalfPriv := revokeTweakScalar.Mul(&revokeBasePriv.Key)
+	commitHalfPriv := commitTweakScalar.Mul(&commitSecret.Key)
+
+	revocationPriv := revokeHalfPriv.Add(commitHalfPriv)
+
+	return &btcec.PrivateKey{Key: *revocationPriv}
 }
