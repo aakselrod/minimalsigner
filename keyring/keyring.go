@@ -106,20 +106,30 @@ func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 	reqData := map[string]interface{}{
 		"node": k.node,
 		"path": []int{
-			vault.Bip0043Purpose +
-				hdkeychain.HardenedKeyStart,
-			k.coin + hdkeychain.HardenedKeyStart,
-			keyDesc.Family + hdkeychain.HardenedKeyStart,
-			keyDesc.Index,
+			int(vault.Bip0043purpose +
+				hdkeychain.HardenedKeyStart),
+			int(k.coin + hdkeychain.HardenedKeyStart),
+			int(keyDesc.Family + hdkeychain.HardenedKeyStart),
+			0, // Only external branch in LN purpose.
+			int(keyDesc.Index),
 		},
 	}
 
-	sharedKeyResp, err := client.Write(
+	if keyDesc.PubKey != nil {
+		reqData["pubkey"] = hex.EncodeToString(
+			keyDesc.PubKey.SerializeCompressed(),
+		)
+	}
+
+	sharedKeyResp, err := k.client.Write(
 		"minimalsigner/lnd-nodes/ecdh",
 		reqData,
 	)
+	if err != nil {
+		return [32]byte{}, err
+	}
 
-	sharedKeyHex, ok := sharedKeyResp.Data["sharedKey"]
+	sharedKeyHex, ok := sharedKeyResp.Data["sharedKey"].(string)
 	if !ok {
 		return [32]byte{}, errors.New("vault returned no shared key")
 	}
@@ -133,7 +143,11 @@ func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 		return [32]byte{}, errors.New("vault returned bad shared key")
 	}
 
-	return [32]byte{sharedKeyBytes}, nil
+	var sharedKeyByteArray [32]byte
+
+	copy(sharedKeyByteArray[:], sharedKeyBytes)
+
+	return sharedKeyByteArray, nil
 }
 
 // SignMessage signs the given message, single or double SHA256 hashing it
@@ -151,10 +165,11 @@ func (k *KeyRing) SignMessage(keyLoc KeyLocator, msg []byte, doubleHash bool,
 	reqData := map[string]interface{}{
 		"node": k.node,
 		"path": []int{
-			vault.Bip0043Purpose + hdkeychain.HardenedKeyStart,
-			k.coin + hdkeychain.HardenedKeyStart,
-			keyLoc.Family + hdkeychain.HardenedKeyStart,
-			keyLoc.Index,
+			int(vault.Bip0043purpose + hdkeychain.HardenedKeyStart),
+			int(k.coin + hdkeychain.HardenedKeyStart),
+			int(keyLoc.Family + hdkeychain.HardenedKeyStart),
+			0, // Only external branch in LN purpose.
+			int(keyLoc.Index),
 		},
 		"method": "ecdsa",
 		"digest": hex.EncodeToString(digest),
@@ -164,12 +179,15 @@ func (k *KeyRing) SignMessage(keyLoc KeyLocator, msg []byte, doubleHash bool,
 		reqData["method"] = "ecdsa-compact"
 	}
 
-	signResp, err := client.Write(
+	signResp, err := k.client.Write(
 		"minimalsigner/lnd-nodes/sign",
 		reqData,
 	)
+	if err != nil {
+		return nil, err
+	}
 
-	signatureHex, ok := signResp.Data["signature"]
+	signatureHex, ok := signResp.Data["signature"].(string)
 	if !ok {
 		return nil, errors.New("vault returned no signature")
 	}
@@ -198,25 +216,29 @@ func (k *KeyRing) SignMessageSchnorr(keyLoc KeyLocator, msg []byte,
 	reqData := map[string]interface{}{
 		"node": k.node,
 		"path": []int{
-			vault.Bip0043Purpose + hdkeychain.HardenedKeyStart,
-			k.coin + hdkeychain.HardenedKeyStart,
-			keyLoc.Family + hdkeychain.HardenedKeyStart,
-			keyLoc.Index,
+			int(vault.Bip0043purpose + hdkeychain.HardenedKeyStart),
+			int(k.coin + hdkeychain.HardenedKeyStart),
+			int(keyLoc.Family + hdkeychain.HardenedKeyStart),
+			0, // Only external branch in LN purpose.
+			int(keyLoc.Index),
 		},
 		"method": "schnorr",
 		"digest": hex.EncodeToString(digest),
 	}
 
 	if len(taprootTweak) > 0 {
-		req.Data["taptweak"] = hex.EncodeToString(taprootTweak)
+		reqData["taptweak"] = hex.EncodeToString(taprootTweak)
 	}
 
-	signResp, err := client.Write(
+	signResp, err := k.client.Write(
 		"minimalsigner/lnd-nodes/sign",
 		reqData,
 	)
+	if err != nil {
+		return nil, err
+	}
 
-	signatureHex, ok := signResp.Data["signature"]
+	signatureHex, ok := signResp.Data["signature"].(string)
 	if !ok {
 		return nil, errors.New("vault returned no signature")
 	}
@@ -226,13 +248,12 @@ func (k *KeyRing) SignMessageSchnorr(keyLoc KeyLocator, msg []byte,
 		return nil, err
 	}
 
-	return ecdsa.ParseSignature(signatureBytes)
+	return schnorr.ParseSignature(signatureBytes)
 }
 
 // SignPsbt signs all inputs in the PSBT that can be signed by our keyring.
 // We have no state information, so we only attempt to derive the appropriate
 // keys for each input and sign if we get a match.
-
 func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 	// In signedInputs we return the indices of psbt inputs that were signed
 	// by our wallet. This way the caller can check if any inputs were signed.
@@ -275,7 +296,7 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 			continue
 		}
 
-		// Let's try and derive the key now. This method will decide if
+		/*// Let's try and derive the key now. This method will decide if
 		// it's a BIP49/84 key for normal on-chain funds or a key of the
 		// custom purpose 1017 key scope.
 		derivationInfo := in.Bip32Derivation[0]
@@ -304,6 +325,7 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 		// Do we need to tweak anything? Single or double tweaks are
 		// sent as custom/proprietary fields in the PSBT input section.
 		privKey = maybeTweakPrivKeyPsbt(in.Unknowns, privKey)
+		*/
 
 		// What kind of signature is expected from us and do we have all
 		// information we need?
@@ -361,8 +383,9 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 func (k *KeyRing) signSegWitV0(in *psbt.PInput, tx *wire.MsgTx,
 	sigHashes *txscript.TxSigHashes, idx int) error {
 
-	// TODO(aakselrod): get pubkey on sign as well
-	pubKeyBytes := privKey.PubKey().SerializeCompressed()
+	if len(in.Bip32Derivation) == 0 {
+		return nil
+	}
 
 	// Extract the correct witness and/or legacy scripts now, depending on
 	// the type of input we sign. The txscript package has the peculiar
@@ -371,24 +394,54 @@ func (k *KeyRing) signSegWitV0(in *psbt.PInput, tx *wire.MsgTx,
 	// we call it subScript here instead of witness script.
 	subScript := prepareScriptsV0(in)
 
-	// We have everything we need for signing the input now.
+	// We have everything we need to calculate the digest for signing.
 	digest, err := txscript.CalcWitnessSigHash(subScript, sigHashes,
-		in.SigHashType, tx, idx, in.WitnessUtxo.Value)
+		in.SighashType, tx, idx, in.WitnessUtxo.Value)
 	if err != nil {
 		return fmt.Errorf("error getting sighash for input %d: %v",
 			idx, err)
 	}
 
-	sig, err := txscript.RawTxInWitnessSignature(
-		tx, sigHashes, idx, in.WitnessUtxo.Value, subScript,
-		in.SighashType, privKey,
+	reqData := map[string]interface{}{
+		"node":   k.node,
+		"path":   sliceUint32ToInt(in.Bip32Derivation[0].Bip32Path),
+		"method": "ecdsa",
+		"digest": hex.EncodeToString(digest),
+	}
+
+	getTweakParams(in.Unknowns, reqData)
+
+	signResp, err := k.client.Write(
+		"minimalsigner/lnd-nodes/sign",
+		reqData,
 	)
 	if err != nil {
-		return fmt.Errorf("error signing input %d: %v", idx, err)
+		return err
 	}
+
+	signatureHex, ok := signResp.Data["signature"].(string)
+	if !ok {
+		return errors.New("vault returned no signature")
+	}
+
+	signatureBytes, err := hex.DecodeString(signatureHex)
+	if err != nil {
+		return err
+	}
+
+	pubKeyHex, ok := signResp.Data["pubkey"].(string)
+	if !ok {
+		return errors.New("vault returned no pubkey")
+	}
+
+	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
+	if err != nil {
+		return err
+	}
+
 	in.PartialSigs = append(in.PartialSigs, &psbt.PartialSig{
 		PubKey:    pubKeyBytes,
-		Signature: sig,
+		Signature: append(signatureBytes, byte(in.SighashType)),
 	})
 
 	return nil
@@ -400,17 +453,50 @@ func (k *KeyRing) signSegWitV1KeySpend(in *psbt.PInput, tx *wire.MsgTx,
 	sigHashes *txscript.TxSigHashes, idx int,
 	tapscriptRootHash []byte) error {
 
-	rawSig, err := txscript.RawTxInTaprootSignature(
-		tx, sigHashes, idx, in.WitnessUtxo.Value,
-		in.WitnessUtxo.PkScript, tapscriptRootHash, in.SighashType,
-		privKey,
-	)
-	if err != nil {
-		return fmt.Errorf("error signing taproot input %d: %v", idx,
-			err)
+	if len(in.Bip32Derivation) == 0 {
+		return nil
 	}
 
-	in.TaprootKeySpendSig = rawSig
+	digest, err := txscript.CalcTaprootSignatureHash(
+		sigHashes, in.SighashType, tx, idx,
+		txscript.NewCannedPrevOutputFetcher(
+			in.WitnessUtxo.PkScript,
+			in.WitnessUtxo.Value,
+		),
+	)
+	if err != nil {
+		return err
+	}
+
+	reqData := map[string]interface{}{
+		"node":     k.node,
+		"path":     sliceUint32ToInt(in.Bip32Derivation[0].Bip32Path),
+		"method":   "schnorr",
+		"digest":   hex.EncodeToString(digest),
+		"taptweak": hex.EncodeToString(tapscriptRootHash),
+	}
+
+	getTweakParams(in.Unknowns, reqData)
+
+	signResp, err := k.client.Write(
+		"minimalsigner/lnd-nodes/sign",
+		reqData,
+	)
+	if err != nil {
+		return err
+	}
+
+	signatureHex, ok := signResp.Data["signature"].(string)
+	if !ok {
+		return errors.New("vault returned no signature")
+	}
+
+	signatureBytes, err := hex.DecodeString(signatureHex)
+	if err != nil {
+		return err
+	}
+
+	in.TaprootKeySpendSig = append(signatureBytes, byte(in.SighashType))
 
 	return nil
 }
@@ -420,13 +506,47 @@ func (k *KeyRing) signSegWitV1KeySpend(in *psbt.PInput, tx *wire.MsgTx,
 func (k *KeyRing) signSegWitV1ScriptSpend(in *psbt.PInput, tx *wire.MsgTx,
 	sigHashes *txscript.TxSigHashes, idx int, leaf txscript.TapLeaf) error {
 
-	rawSig, err := txscript.RawTxInTapscriptSignature(
-		tx, sigHashes, idx, in.WitnessUtxo.Value,
-		in.WitnessUtxo.PkScript, leaf, in.SighashType, privKey,
+	if len(in.Bip32Derivation) == 0 {
+		return nil
+	}
+
+	digest, err := txscript.CalcTapscriptSignaturehash(
+		sigHashes, in.SighashType, tx, idx,
+		txscript.NewCannedPrevOutputFetcher(
+			in.WitnessUtxo.PkScript,
+			in.WitnessUtxo.Value,
+		),
+		leaf,
 	)
 	if err != nil {
-		return fmt.Errorf("error signing taproot script input %d: %v",
-			idx, err)
+		return err
+	}
+
+	reqData := map[string]interface{}{
+		"node":   k.node,
+		"path":   sliceUint32ToInt(in.Bip32Derivation[0].Bip32Path),
+		"method": "schnorr",
+		"digest": hex.EncodeToString(digest),
+	}
+
+	getTweakParams(in.Unknowns, reqData)
+
+	signResp, err := k.client.Write(
+		"minimalsigner/lnd-nodes/sign",
+		reqData,
+	)
+	if err != nil {
+		return err
+	}
+
+	signatureHex, ok := signResp.Data["signature"].(string)
+	if !ok {
+		return errors.New("vault returned no signature")
+	}
+
+	signatureBytes, err := hex.DecodeString(signatureHex)
+	if err != nil {
+		return err
 	}
 
 	leafHash := leaf.TapHash()
@@ -434,10 +554,8 @@ func (k *KeyRing) signSegWitV1ScriptSpend(in *psbt.PInput, tx *wire.MsgTx,
 		in.TaprootScriptSpendSig, &psbt.TaprootScriptSpendSig{
 			XOnlyPubKey: in.TaprootBip32Derivation[0].XOnlyPubKey,
 			LeafHash:    leafHash[:],
-			// We snip off the sighash flag from the end (if it was
-			// specified in the first place.)
-			Signature: rawSig[:schnorr.SignatureSize],
-			SigHash:   in.SighashType,
+			Signature:   signatureBytes,
+			SigHash:     in.SighashType,
 		},
 	)
 
@@ -462,27 +580,27 @@ func prepareScriptsV0(in *psbt.PInput) []byte {
 	}
 }
 
-// maybeTweakPrivKeyPsbt examines if there are any tweak parameters given in the
-// custom/proprietary PSBT fields and may perform a mapping on the passed
-// private key in order to utilize the tweaks, if populated.
-func getTweaks(unknowns []*psbt.Unknown, privKey *btcec.PrivateKey) ([]byte,
-	[]byte) {
-
+// getTweakParams examines if there are any tweak parameters given in the
+// custom/proprietary PSBT fields and adds them to a vault request's data
+// to use them if populated.
+func getTweakParams(unknowns []*psbt.Unknown, reqData map[string]interface{}) {
 	// There can be other custom/unknown keys in a PSBT that we just ignore.
 	// Key tweaking is optional and only one tweak (single _or_ double) can
 	// ever be applied (at least for any use cases described in the BOLT
 	// spec).
 	for _, u := range unknowns {
 		if bytes.Equal(u.Key, psbtKeyTypeInputSignatureTweakSingle) {
-			return u.Value, nil
+			reqData["ln1tweak"] = hex.EncodeToString(u.Value)
+			return
 		}
 
 		if bytes.Equal(u.Key, psbtKeyTypeInputSignatureTweakDouble) {
-			return nil, u.Value
+			reqData["ln2tweak"] = hex.EncodeToString(u.Value)
+			return
 		}
 	}
 
-	return nil, nil
+	return
 }
 
 // validateSigningMethod attempts to detect the signing method that is required
@@ -575,7 +693,6 @@ func validateSigningMethod(in *psbt.PInput) (signMethod, error) {
 	}
 }
 
-// SignSegWitV0 attempts to generate a signature for a SegWit version 0 input
 // psbtPrevOutputFetcher returns a txscript.PrevOutFetcher built from the UTXO
 // information in a PSBT packet.
 func psbtPrevOutputFetcher(packet *psbt.Packet) *txscript.MultiPrevOutFetcher {
@@ -607,4 +724,14 @@ func psbtPrevOutputFetcher(packet *psbt.Packet) *txscript.MultiPrevOutFetcher {
 	}
 
 	return fetcher
+}
+
+func sliceUint32ToInt(uints []uint32) []int {
+	ints := make([]int, len(uints))
+
+	for idx, element := range uints {
+		ints[idx] = int(element)
+	}
+
+	return ints
 }

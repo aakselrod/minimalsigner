@@ -155,15 +155,26 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 
 	// If we're asked to output a macaroon file, do it here.
 	if cfg.OutputMacaroon != "" {
-		for node := range nodeListResp.Data {
-			caveat := checkers.Caveat{
-				Condition: checkers.Condition("node", node),
+		for node, coin := range nodeListResp.Data {
+			caveats := []checkers.Caveat{
+				checkers.Caveat{
+					Condition: checkers.Condition(
+						"node",
+						node,
+					),
+				},
+				checkers.Caveat{
+					Condition: checkers.Condition(
+						"coin",
+						fmt.Sprintf("%d", coin),
+					),
+				},
 			}
 
 			mac, err := bkry.Oven.NewMacaroon(
 				ctx,
 				bakery.LatestVersion,
-				[]checkers.Caveat{caveat},
+				caveats,
 				nodePermissions...,
 			)
 			if err != nil {

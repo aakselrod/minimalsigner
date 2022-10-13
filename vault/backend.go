@@ -144,6 +144,14 @@ peer pubkey
 						"being hardened",
 					Default: []int{},
 				},
+				"pubkey": &framework.FieldSchema{
+					Type: framework.TypeString,
+					Description: "optional: pubkey for " +
+						"which to do ECDH, checked " +
+						"against derived pubkey to " +
+						"ensure a match",
+					Default: "",
+				},
 				"peer": &framework.FieldSchema{
 					Type: framework.TypeString,
 					Description: "pubkey for ECDH peer, " +
@@ -377,7 +385,6 @@ func (b *backend) listAccounts(ctx context.Context, req *logical.Request,
 	}, nil
 }
 
-// TODO(aakselrod): do derivation check against optional pubkey before ECDH.
 func (b *backend) ecdh(ctx context.Context, req *logical.Request,
 	data *framework.FieldData) (*logical.Response, error) {
 
@@ -418,28 +425,27 @@ func (b *backend) ecdh(ctx context.Context, req *logical.Request,
 	}
 	defer zero(seed)
 
-	derivationPathInts := data.Get("path").([]int)
-	derivationPath, err := sliceIntToUint32(derivationPathInts)
-	if err != nil {
-		b.Logger().Error("Failed to parse derivation path",
-			"derivation_path", derivationPathInts, "error", err)
-		return nil, err
-	}
-
-	privKey, err := derivePrivKey(seed, net, derivationPath)
+	privKey, err := derivePrivKey(seed, net, data.Get("path").([]int))
 	if err != nil {
 		b.Logger().Error("Failed to derive privkey",
-			"node", strNode, "derivation_path", derivationPath,
-			"error", err)
+			"node", strNode, "error", err)
 		return nil, err
 	}
 	defer privKey.Zero()
 
+	err = checkRequiredPubKey(privKey, data.Get("pubkey").(string))
+	if err != nil {
+		// We log here as warning because there's no case when we
+		// should be using ECDH with a mismatching own key.
+		b.Logger().Info("Pubkey mismatch",
+			"node", strNode, "error", err)
+		return nil, err
+	}
+
 	ecPrivKey, err := privKey.ECPrivKey()
 	if err != nil {
 		b.Logger().Error("Failed to derive valid ECDSA privkey",
-			"node", strNode, "derivation_path", derivationPath,
-			"error", err)
+			"node", strNode, "error", err)
 		return nil, err
 	}
 	defer ecPrivKey.Zero()
@@ -459,14 +465,6 @@ func (b *backend) ecdh(ctx context.Context, req *logical.Request,
 func (b *backend) derivePubKey(ctx context.Context, req *logical.Request,
 	data *framework.FieldData) (*logical.Response, error) {
 
-	derivationPathInts := data.Get("path").([]int)
-	derivationPath, err := sliceIntToUint32(derivationPathInts)
-	if err != nil {
-		b.Logger().Error("Failed to parse derivation path",
-			"derivation_path", derivationPathInts, "error", err)
-		return nil, err
-	}
-
 	strNode := data.Get("node").(string)
 
 	seed, net, err := b.getNode(ctx, req.Storage, strNode)
@@ -477,19 +475,17 @@ func (b *backend) derivePubKey(ctx context.Context, req *logical.Request,
 	}
 	defer zero(seed)
 
-	pubKey, err := derivePubKey(seed, net, derivationPath)
+	pubKey, err := derivePubKey(seed, net, data.Get("path").([]int))
 	if err != nil {
 		b.Logger().Error("Failed to derive pubkey",
-			"node", strNode, "derivation_path", derivationPath,
-			"error", err)
+			"node", strNode, "error", err)
 		return nil, err
 	}
 
 	pubKeyBytes, err := extKeyToPubBytes(pubKey)
 	if err != nil {
 		b.Logger().Error("derivePubKey: Failed to get pubkey bytes",
-			"node", strNode, "derivation_path", derivationPath,
-			"error", err)
+			"node", strNode, "error", err)
 		return nil, err
 	}
 
@@ -509,9 +505,6 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 
 	numTweaks := int(0)
 
-	if len(tapTweakHex) > 0 {
-		numTweaks++
-	}
 	if len(singleTweakHex) > 0 {
 		numTweaks++
 	}
@@ -520,16 +513,8 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 	}
 
 	if numTweaks > 1 {
-		b.Logger().Error("Too many tweaks requested; maximum of one")
-		return nil, errors.New("too many tweaks")
-	}
-
-	derivationPathInts := data.Get("path").([]int)
-	derivationPath, err := sliceIntToUint32(derivationPathInts)
-	if err != nil {
-		b.Logger().Error("Failed to parse derivation path",
-			"derivation_path", derivationPathInts, "error", err)
-		return nil, err
+		b.Logger().Error("Both single and double tweak specified")
+		return nil, errors.New("both single and double tweak specified")
 	}
 
 	strNode := data.Get("node").(string)
@@ -542,50 +527,30 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 	}
 	defer zero(seed)
 
-	privKey, err := derivePrivKey(seed, net, derivationPath)
+	privKey, err := derivePrivKey(seed, net, data.Get("path").([]int))
 	if err != nil {
 		b.Logger().Error("Failed to derive privkey",
-			"node", strNode, "derivation_path", derivationPath,
-			"error", err)
+			"node", strNode, "error", err)
 		return nil, err
 	}
 	defer privKey.Zero()
 
+	err = checkRequiredPubKey(privKey, data.Get("pubkey").(string))
+	if err != nil {
+		// We log here as info because this is expected when signing
+		// a PSBT.
+		b.Logger().Info("Pubkey mismatch",
+			"node", strNode, "error", err)
+		return nil, err
+	}
+
 	ecPrivKey, err := privKey.ECPrivKey()
 	if err != nil {
 		b.Logger().Error("Failed to derive valid ECDSA privkey",
-			"node", strNode, "derivation_path", derivationPath,
-			"error", err)
+			"node", strNode, "error", err)
 		return nil, err
 	}
 	defer ecPrivKey.Zero()
-
-	pubKeyBytes, err := extKeyToPubBytes(privKey)
-	if err != nil {
-		b.Logger().Error("deriveAndSign: Failed to get pubkey bytes",
-			"node", strNode, "derivation_path", derivationPath,
-			"error", err)
-		return nil, err
-	}
-
-	reqPubKey := data.Get("pubkey").(string)
-
-	if reqPubKey != "" {
-		reqPubBytes, err := hex.DecodeString(reqPubKey)
-		if err != nil {
-			b.Logger().Error("Failed to decode requested pubkey ",
-				"hex", "error", err)
-			return nil, err
-		}
-
-		// This is expected when we're checking if a PSBT input is ours
-		// so the severity is just info.
-		if !bytes.Equal(reqPubBytes, pubKeyBytes) {
-			b.Logger().Info("Requested pubkey didn't match "+
-				"derived pubkey", "requested", reqPubKey)
-			return nil, errors.New("pubkey mismatch")
-		}
-	}
 
 	signMethod := data.Get("method").(string)
 
@@ -594,7 +559,7 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 	case signMethod != "schnorr":
 		break
 
-	// Taproot tweak as used by SignMessageSchnorr.
+	// Taproot tweak.
 	case len(tapTweakHex) > 0:
 		tapTweakBytes, err := hex.DecodeString(tapTweakHex)
 		if err != nil {
@@ -661,9 +626,7 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 		sig, err := schnorr.Sign(ecPrivKey, digestBytes)
 		if err != nil {
 			b.Logger().Error("Failed to sign digest using Schnorr",
-				"node", strNode,
-				"derivation_path", derivationPath,
-				"pubkey", reqPubKey, "error", err)
+				"node", strNode, "error", err)
 			return nil, err
 		}
 
@@ -674,9 +637,18 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 		return nil, errors.New("invalid signing method")
 	}
 
+	// We return the pre-tweak pubkey for populating PSBTs and other uses.
+	pubKeyBytes, err := extKeyToPubBytes(privKey)
+	if err != nil {
+		b.Logger().Error("derivePubKey: Failed to get pubkey bytes",
+			"node", strNode, "error", err)
+		return nil, err
+	}
+
 	return &logical.Response{
 		Data: map[string]interface{}{
 			"signature": hex.EncodeToString(sigBytes),
+			"pubKey":    hex.EncodeToString(pubKeyBytes),
 		},
 	}, nil
 }
@@ -722,15 +694,29 @@ func (b *backend) getNode(ctx context.Context, storage logical.Storage,
 func (b *backend) listNodes(ctx context.Context, req *logical.Request,
 	data *framework.FieldData) (*logical.Response, error) {
 
-	vals, err := req.Storage.List(ctx, "lnd-nodes/")
+	nodes, err := req.Storage.List(ctx, "lnd-nodes/")
 	if err != nil {
 		b.Logger().Error("Failed to retrieve the list of nodes",
 			"error", err)
 		return nil, err
 	}
 
-	// TODO(aakselrod): return coin type for each node.
-	return logical.ListResponse(vals), nil
+	respData := make(map[string]interface{})
+	for _, node := range nodes {
+		seed, net, err := b.getNode(ctx, req.Storage, node)
+		if err != nil {
+			b.Logger().Error("Failed to retrieve node info",
+				"node", node, "error", err)
+			return nil, err
+		}
+		defer zero(seed)
+
+		respData[node] = int(net.HDCoinType)
+	}
+
+	return &logical.Response{
+		Data: respData,
+	}, nil
 }
 
 func (b *backend) createNode(ctx context.Context, req *logical.Request,
@@ -748,7 +734,9 @@ func (b *backend) createNode(ctx context.Context, req *logical.Request,
 
 	err = hdkeychain.ErrUnusableSeed
 	for err == hdkeychain.ErrUnusableSeed {
-		seed, err = hdkeychain.GenerateSeed(hdkeychain.RecommendedSeedLen)
+		seed, err = hdkeychain.GenerateSeed(
+			hdkeychain.RecommendedSeedLen,
+		)
 	}
 	if err != nil {
 		b.Logger().Error("Failed to generate new LND seed",
@@ -756,10 +744,10 @@ func (b *backend) createNode(ctx context.Context, req *logical.Request,
 		return nil, err
 	}
 
-	nodePubKey, err := derivePubKey(seed, net, []uint32{
-		Bip0043purpose + hdkeychain.HardenedKeyStart,
-		net.HDCoinType + hdkeychain.HardenedKeyStart,
-		NodeKeyAcct + hdkeychain.HardenedKeyStart,
+	nodePubKey, err := derivePubKey(seed, net, []int{
+		int(Bip0043purpose + hdkeychain.HardenedKeyStart),
+		int(net.HDCoinType + hdkeychain.HardenedKeyStart),
+		int(NodeKeyAcct + hdkeychain.HardenedKeyStart),
 		0,
 		0,
 	})
@@ -822,28 +810,56 @@ func getNet(strNet string) (*chaincfg.Params, error) {
 	}
 }
 
-// assertHardened makes sure each given element is >= 2^31.
-func assertHardened(elements ...uint32) error {
-	for idx, element := range elements {
-		if element < hdkeychain.HardenedKeyStart {
-			return fmt.Errorf("element at index %d is not hardened",
-				idx)
-		}
+func checkRequiredPubKey(derived *hdkeychain.ExtendedKey,
+	required string) error {
+
+	if required == "" {
+		return nil
+	}
+
+	pubKeyBytes, err := extKeyToPubBytes(derived)
+	if err != nil {
+		return err
+	}
+
+	requiredBytes, err := hex.DecodeString(required)
+	if err != nil {
+		return err
+	}
+
+	if !bytes.Equal(requiredBytes, pubKeyBytes) {
+		return errors.New("pubkey mismatch")
 	}
 
 	return nil
 }
 
 func derivePrivKey(seed []byte, net *chaincfg.Params,
-	derivationPath []uint32) (*hdkeychain.ExtendedKey, error) {
+	derivationPath []int) (*hdkeychain.ExtendedKey, error) {
 
 	if len(derivationPath) != 5 {
 		return nil, errors.New("derivation path not 5 elements")
 	}
 
-	err := assertHardened(derivationPath[:2]...)
-	if err != nil {
-		return nil, err
+	derPath := make([]uint32, 5)
+
+	for idx, element := range derivationPath {
+		if element < 0 {
+			return nil, errors.New("negative derivation path " +
+				"element")
+		}
+
+		if element > math.MaxUint32 {
+			return nil, errors.New("derivation path element > " +
+				"MaxUint32")
+		}
+
+		if idx < 3 && element < hdkeychain.HardenedKeyStart {
+			return nil, fmt.Errorf("element at index %d is not "+
+				"hardened", idx)
+		}
+
+		derPath[idx] = uint32(element)
 	}
 
 	rootKey, err := hdkeychain.NewMaster(seed, net)
@@ -854,7 +870,7 @@ func derivePrivKey(seed []byte, net *chaincfg.Params,
 
 	// Derive purpose.
 	purposeKey, err := rootKey.DeriveNonStandard(
-		derivationPath[0],
+		derPath[0],
 	)
 	if err != nil {
 		return nil, errors.New("error deriving purpose")
@@ -863,7 +879,7 @@ func derivePrivKey(seed []byte, net *chaincfg.Params,
 
 	// Derive coin type.
 	coinTypeKey, err := purposeKey.DeriveNonStandard(
-		derivationPath[1],
+		derPath[1],
 	)
 	if err != nil {
 		return nil, errors.New("error deriving coin type")
@@ -872,7 +888,7 @@ func derivePrivKey(seed []byte, net *chaincfg.Params,
 
 	// Derive account.
 	accountKey, err := coinTypeKey.DeriveNonStandard(
-		derivationPath[2],
+		derPath[2],
 	)
 	if err != nil {
 		return nil, errors.New("error deriving account")
@@ -880,14 +896,14 @@ func derivePrivKey(seed []byte, net *chaincfg.Params,
 	defer accountKey.Zero()
 
 	// Derive branch.
-	branchKey, err := accountKey.DeriveNonStandard(derivationPath[3])
+	branchKey, err := accountKey.DeriveNonStandard(derPath[3])
 	if err != nil {
 		return nil, errors.New("error deriving branch")
 	}
 	defer branchKey.Zero()
 
 	// Derive index.
-	indexKey, err := accountKey.DeriveNonStandard(derivationPath[4])
+	indexKey, err := accountKey.DeriveNonStandard(derPath[4])
 	if err != nil {
 		return nil, errors.New("error deriving index")
 	}
@@ -895,8 +911,8 @@ func derivePrivKey(seed []byte, net *chaincfg.Params,
 	return indexKey, nil
 }
 
-func derivePubKey(seed []byte, net *chaincfg.Params,
-	derivationPath []uint32) (*hdkeychain.ExtendedKey, error) {
+func derivePubKey(seed []byte, net *chaincfg.Params, derivationPath []int) (
+	*hdkeychain.ExtendedKey, error) {
 
 	privKey, err := derivePrivKey(seed, net, derivationPath)
 	if err != nil {
@@ -928,28 +944,6 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 	}
 
 	return &b, nil
-}
-
-// sliceIntToUint32 converts a derivation path that's a slice of int to a slice
-// of uint32 for use in deriving a key.
-func sliceIntToUint32(ints []int) ([]uint32, error) {
-	uints := make([]uint32, len(ints))
-
-	for idx := range ints {
-		if ints[idx] < 0 {
-			return nil, errors.New("negative derivation path " +
-				"element")
-		}
-
-		if ints[idx] > math.MaxUint32 {
-			return nil, errors.New("derivation path element > " +
-				"MaxUint32")
-		}
-
-		uints[idx] = uint32(ints[idx])
-	}
-
-	return uints, nil
 }
 
 // zero sets all bytes in the passed slice to zero.  This is used to
