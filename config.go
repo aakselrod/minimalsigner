@@ -370,12 +370,6 @@ func ValidateConfig(cfg Config, fileParser, flagParser *flags.Parser) (
 		return nil, mkErr("error normalizing RPC listen addrs: %v", err)
 	}
 
-	// Get the seed from the environment.
-	cfg.seed, err = get32BytesFromEnv("SIGNER_SEED")
-	if err != nil {
-		return nil, err
-	}
-
 	cfg.OutputAccounts = CleanAndExpandPath(cfg.OutputAccounts)
 
 	// Get the macaroon root key from the environment.

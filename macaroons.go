@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"gopkg.in/macaroon-bakery.v2/bakery/checkers"
 	"gopkg.in/macaroon.v2"
 )
 
@@ -28,6 +30,33 @@ func (s *assignedRootKeyStore) RootKey(ctx context.Context) ([]byte, []byte,
 	error) {
 
 	return s.key, defaultRootKeyID, nil
+}
+
+type caveatChecker struct{}
+
+func (c *caveatChecker) CheckFirstPartyCaveat(ctx context.Context,
+	caveat string) error {
+	switch {
+	case caveat == "coin 0":
+		return nil
+
+	case caveat == "coin 1":
+		return nil
+
+	case len(caveat) == 71 && strings.HasPrefix(
+		caveat,
+		"node ",
+	):
+		_, err := hex.DecodeString(caveat[5:])
+		return err
+
+	default:
+		return fmt.Errorf("invalid caveat: %s", caveat)
+	}
+}
+
+func (c *caveatChecker) Namespace() *checkers.Namespace {
+	return nil
 }
 
 func (r *rpcServer) checkMac(ctx context.Context, method string) (string, int,
@@ -56,12 +85,12 @@ func (r *rpcServer) checkMac(ctx context.Context, method string) (string, int,
 			signerLog.Tracef("checking caveat: %s", caveat)
 
 			switch {
-			case strings.HasPrefix(caveat, "node:"):
+			case strings.HasPrefix(caveat, "node "):
 				if node != "" {
 					return errors.New("node already set")
 				}
 
-				// Caveat should be 5 bytes of "node:" prefix
+				// Caveat should be 5 bytes of "node " prefix
 				// plus 66 bytes of pubkey hex digits.
 				if len(caveat) != 71 {
 					return errors.New("invalid node pubkey")
@@ -69,7 +98,7 @@ func (r *rpcServer) checkMac(ctx context.Context, method string) (string, int,
 
 				node = caveat[5:]
 
-			case caveat == "coin:0":
+			case caveat == "coin 0":
 				if coinSet {
 					return errors.New("coin already set")
 				}
@@ -77,7 +106,7 @@ func (r *rpcServer) checkMac(ctx context.Context, method string) (string, int,
 				coin = 0
 				coinSet = true
 
-			case caveat == "coin:1":
+			case caveat == "coin 1":
 				if coinSet {
 					return errors.New("coin already set")
 				}

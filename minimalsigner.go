@@ -6,6 +6,7 @@ package minimalsigner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -104,7 +105,7 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 
 	signerClient := vaultClient.Logical()
 
-	nodeListResp, err := signerClient.List("minimalsigner/lnd-nodes")
+	nodeListResp, err := signerClient.Read("minimalsigner/lnd-nodes")
 	if err != nil {
 		return mkErr("error getting list of lnd nodes: %v", err)
 	}
@@ -146,9 +147,13 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 		key: cfg.macRootKey[:],
 	}
 
+	// Check that we have a valid caveat, we only accept 3 formats.
+	checker := &caveatChecker{}
+
 	bakeryParams := bakery.BakeryParams{
 		RootKeyStore: rootKeyStore,
 		Location:     "lnd",
+		Checker:      checker,
 	}
 
 	bkry := bakery.New(bakeryParams)
@@ -166,7 +171,7 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 				checkers.Caveat{
 					Condition: checkers.Condition(
 						"coin",
-						fmt.Sprintf("%d", coin),
+						coin.(json.Number).String(),
 					),
 				},
 			}

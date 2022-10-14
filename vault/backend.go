@@ -241,7 +241,7 @@ func (b *backend) ecdh(ctx context.Context, req *logical.Request,
 
 	return &logical.Response{
 		Data: map[string]interface{}{
-			"sharedKey": hex.EncodeToString(h[:]),
+			"sharedkey": hex.EncodeToString(h[:]),
 		},
 	}, nil
 }
@@ -275,7 +275,7 @@ func (b *backend) derivePubKey(ctx context.Context, req *logical.Request,
 
 	return &logical.Response{
 		Data: map[string]interface{}{
-			"pubKey": hex.EncodeToString(pubKeyBytes),
+			"pubkey": hex.EncodeToString(pubKeyBytes),
 		},
 	}, nil
 }
@@ -432,7 +432,7 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 	return &logical.Response{
 		Data: map[string]interface{}{
 			"signature": hex.EncodeToString(sigBytes),
-			"pubKey":    hex.EncodeToString(pubKeyBytes),
+			"pubkey":    hex.EncodeToString(pubKeyBytes),
 		},
 	}, nil
 }
@@ -558,7 +558,7 @@ func (b *backend) createNode(ctx context.Context, req *logical.Request,
 
 	return &logical.Response{
 		Data: map[string]interface{}{
-			"nodePubKey": strPubKey,
+			"node": strPubKey,
 		},
 	}, nil
 }
