@@ -129,7 +129,7 @@ func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 		return [32]byte{}, err
 	}
 
-	sharedKeyHex, ok := sharedKeyResp.Data["sharedKey"].(string)
+	sharedKeyHex, ok := sharedKeyResp.Data["sharedkey"].(string)
 	if !ok {
 		return [32]byte{}, errors.New("vault returned no shared key")
 	}
@@ -371,7 +371,41 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 		if err != nil {
 			return nil, err
 		}
+
 		signedInputs = append(signedInputs, uint32(idx))
+
+		newTx := packet.UnsignedTx.Copy()
+		newTx.TxIn[0].SignatureScript = in.RedeemScript
+		newTx.TxIn[0].Witness = wire.TxWitness{
+			in.PartialSigs[0].Signature,
+			in.PartialSigs[0].PubKey,
+		}
+
+		log.Infof("Executing engine on tx input %+v (from %+v)",
+			newTx.TxIn[0], in)
+
+		engine, err := txscript.NewEngine(
+			in.WitnessUtxo.PkScript,
+			newTx,
+			idx,
+			txscript.StandardVerifyFlags,
+			txscript.NewSigCache(10),
+			sigHashes,
+			in.WitnessUtxo.Value,
+			prevOutputFetcher,
+		)
+		if err != nil {
+			log.Errorf("Error creating engine: %v", err)
+			continue
+		}
+
+		err = engine.Execute()
+		if err != nil {
+			log.Errorf("Error executing engine: %v", err)
+			continue
+		}
+
+		log.Infof("Succeeded executing engine")
 	}
 
 	return signedInputs, nil
@@ -409,7 +443,7 @@ func (k *KeyRing) signSegWitV0(in *psbt.PInput, tx *wire.MsgTx,
 		"digest": hex.EncodeToString(digest),
 	}
 
-	getTweakParams(in.Unknowns, reqData)
+	log.Tracef("Sending data %+v for signing request", reqData)
 
 	signResp, err := k.client.Write(
 		"minimalsigner/lnd-nodes/sign",
@@ -418,6 +452,8 @@ func (k *KeyRing) signSegWitV0(in *psbt.PInput, tx *wire.MsgTx,
 	if err != nil {
 		return err
 	}
+
+	log.Tracef("Got data %+v in signing response", signResp.Data)
 
 	signatureHex, ok := signResp.Data["signature"].(string)
 	if !ok {
