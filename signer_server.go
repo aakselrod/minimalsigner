@@ -43,7 +43,7 @@ var _ proto.SignerServer = (*signerServer)(nil)
 
 // SignMessage signs a message with the key specified in the key locator. The
 // returned signature is fixed-size LN wire format encoded.
-func (s *signerServer) SignMessage(_ context.Context,
+func (s *signerServer) SignMessage(ctx context.Context,
 	in *proto.SignMessageReq) (*proto.SignMessageResp, error) {
 
 	if in.Msg == nil {
@@ -63,9 +63,14 @@ func (s *signerServer) SignMessage(_ context.Context,
 		Index:  uint32(in.KeyLoc.KeyIndex),
 	}
 
+	keyRing := ctx.Value(keyRingKey).(*keyring.KeyRing)
+	if keyRing == nil {
+		return nil, fmt.Errorf("no node/coin from macaroon")
+	}
+
 	// Use the schnorr signature algorithm to sign the message.
 	if in.SchnorrSig {
-		sig, err := s.server.keyRing.SignMessageSchnorr(
+		sig, err := keyRing.SignMessageSchnorr(
 			keyLocator, in.Msg, in.DoubleHash,
 			in.SchnorrSigTapTweak,
 		)
@@ -84,27 +89,10 @@ func (s *signerServer) SignMessage(_ context.Context,
 		}, nil
 	}
 
-	// To allow a watch-only wallet to forward the SignMessageCompact to an
-	// endpoint that doesn't add the message prefix, we allow this RPC to
-	// also return the compact signature format instead of adding a flag to
-	// the proto.SignMessage call that removes the message prefix.
-	if in.CompactSig {
-		sigBytes, err := s.server.keyRing.SignMessage(
-			keyLocator, in.Msg, in.DoubleHash, true,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("can't sign the hash: %v", err)
-		}
-
-		return &proto.SignMessageResp{
-			Signature: sigBytes,
-		}, nil
-	}
-
 	// Create the raw ECDSA signature first and convert it to the final wire
 	// format after.
-	sig, err := s.server.keyRing.SignMessage(
-		keyLocator, in.Msg, in.DoubleHash,
+	sig, err := keyRing.SignMessage(
+		keyLocator, in.Msg, in.DoubleHash, in.CompactSig,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("can't sign the hash: %v", err)
@@ -122,7 +110,7 @@ func (s *signerServer) SignMessage(_ context.Context,
 // shouldn't be used anymore.
 // The resulting shared public key is serialized in the compressed format and
 // hashed with sha256, resulting in the final key length of 256bit.
-func (s *signerServer) DeriveSharedKey(_ context.Context,
+func (s *signerServer) DeriveSharedKey(ctx context.Context,
 	in *proto.SharedKeyRequest) (*proto.SharedKeyResponse, error) {
 
 	// Check that EphemeralPubkey is valid.
@@ -190,9 +178,14 @@ func (s *signerServer) DeriveSharedKey(_ context.Context,
 		PubKey: pk,
 	}
 
+	keyRing := ctx.Value(keyRingKey).(*keyring.KeyRing)
+	if keyRing == nil {
+		return nil, fmt.Errorf("no node/coin from macaroon")
+	}
+
 	// Derive the shared key using ECDH and hashing the serialized
 	// compressed shared point.
-	sharedKeyHash, err := s.server.keyRing.ECDH(keyDescriptor, ephemeralPubkey)
+	sharedKeyHash, err := keyRing.ECDH(keyDescriptor, ephemeralPubkey)
 	if err != nil {
 		err := fmt.Errorf("unable to derive shared key: %v", err)
 		signerLog.Error(err)

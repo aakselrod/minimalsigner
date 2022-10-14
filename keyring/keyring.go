@@ -78,13 +78,13 @@ type KeyDescriptor struct {
 // KeyRing is an HD keyring backed by pre-derived in-memory account keys from
 // which index keys can be quickly derived on demand.
 type KeyRing struct {
-	client api.Logical
+	client *api.Logical
 	node   string
 	coin   int
 }
 
 // NewKeyRing returns a vault-backed key ring.
-func NewKeyRing(client api.Logical, node string, coin int) *KeyRing {
+func NewKeyRing(client *api.Logical, node string, coin int) *KeyRing {
 	return &KeyRing{
 		client: client,
 		node:   node,

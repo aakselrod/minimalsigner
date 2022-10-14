@@ -2,7 +2,6 @@ package minimalsigner
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/aakselrod/minimalsigner/keyring"
@@ -10,14 +9,15 @@ import (
 	"github.com/hashicorp/vault/api"
 	"github.com/tv42/zbase32"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/status"
 	"gopkg.in/macaroon-bakery.v2/bakery"
-	"gopkg.in/macaroon.v2"
 )
 
+// keyRingKeyStruct is a struct used to look up a keyring passed in a context.
+type keyRingKeyStruct struct{}
+
 var (
+	keyRingKey = keyRingKeyStruct{}
+
 	// nodePermissions is a slice of all entities for using signing
 	// permissions for authorization purposes, all lowercase.
 	nodePermissions = []bakery.Op{
@@ -45,8 +45,7 @@ var (
 	}
 )
 
-// rpcServer is a gRPC, RPC front end to the lnd daemon.
-// TODO(roasbeef): pagination support for the list-style calls
+// rpcServer is a gRPC front end to the signer daemon.
 type rpcServer struct {
 	// Required by the grpc-gateway/v2 library for forward compatibility.
 	// Must be after the atomically used variables to not break struct
@@ -86,76 +85,17 @@ func (r *rpcServer) intercept(ctx context.Context, req interface{},
 	info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (
 	interface{}, error) {
 
-	err := r.checkMac(ctx, info.FullMethod)
+	node, coin, err := r.checkMac(ctx, info.FullMethod)
 	if err != nil {
 		return nil, err
 	}
 
-	return handler(ctx, req)
-}
+	keyRing := keyring.NewKeyRing(r.client, node, coin)
 
-func (r *rpcServer) checkMac(ctx context.Context, method string) error {
-
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		signerLog.Warnf("request for %v without metadata", method)
-		return status.Error(codes.Unauthenticated, "no metadata")
-	}
-
-	macaroonHex, ok := md["macaroon"]
-	if !ok {
-		signerLog.Warnf("request for %v without macaroons", method)
-		return status.Error(codes.Unauthenticated, "no macaroons")
-	}
-
-	var macSlice macaroon.Slice
-
-	for _, macHex := range macaroonHex {
-		macBytes, err := hex.DecodeString(macHex)
-		if err != nil {
-			signerLog.Warnf("failed to decode macaroon hex "+
-				"for %v: %v", method, err)
-			continue
-		}
-
-		mac := &macaroon.Macaroon{}
-		err = mac.UnmarshalBinary(macBytes)
-		if err != nil {
-			signerLog.Warnf("failed to unmarshal macaroon bytes "+
-				"for %v: %v", method, err)
-			continue
-		}
-
-		err = mac.Verify(r.cfg.macRootKey[:], check, nil)
-		if err != nil {
-			signerLog.Warnf("failed to verify macaroon "+
-				"for %v: %v", method, err)
-			continue
-		}
-
-		macSlice = append(macSlice, mac)
-	}
-
-	if len(macSlice) == 0 {
-		signerLog.Warnf("macaroon authentication failure for %v",
-			method)
-		return status.Error(codes.Unauthenticated,
-			"macaroon authentication failure")
-	}
-
-	authChecker := r.checker.Auth(macSlice)
-	authInfo, err := authChecker.Allow(ctx, r.perms[method]...)
-	if err != nil {
-		signerLog.Warnf("macaroon authorization failure for %v: %v",
-			method, err)
-		return status.Error(codes.PermissionDenied,
-			"macaroon authorization failure")
-	}
-
-	signerLog.Debugf("successfully authorized request to %v", method)
-	signerLog.Tracef("auth info for %v: %+v", method, authInfo)
-
-	return nil
+	return handler(
+		context.WithValue(ctx, keyRingKey, keyRing),
+		req,
+	)
 }
 
 // RegisterWithGrpcServer registers the rpcServer and any subservers with the
@@ -204,7 +144,7 @@ var (
 // SignMessage signs a message with the resident node's private key. The
 // returned signature string is zbase32 encoded and pubkey recoverable, meaning
 // that only the message digest and signature are needed for verification.
-func (r *rpcServer) SignMessage(_ context.Context,
+func (r *rpcServer) SignMessage(ctx context.Context,
 	in *proto.SignMessageRequest) (*proto.SignMessageResponse, error) {
 
 	if in.Msg == nil {
@@ -217,13 +157,18 @@ func (r *rpcServer) SignMessage(_ context.Context,
 		Index:  0,
 	}
 
-	sigBytes, err := r.keyRing.SignMessage(
+	keyRing := ctx.Value(keyRingKey).(*keyring.KeyRing)
+	if keyRing == nil {
+		return nil, fmt.Errorf("no node/coin from macaroon")
+	}
+
+	sig, err := keyRing.SignMessage(
 		keyLoc, in.Msg, !in.SingleHash, true,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	sig := zbase32.EncodeToString(sigBytes)
-	return &proto.SignMessageResponse{Signature: sig}, nil
+	sigStr := zbase32.EncodeToString(sig.Serialize())
+	return &proto.SignMessageResponse{Signature: sigStr}, nil
 }

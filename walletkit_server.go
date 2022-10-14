@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/aakselrod/minimalsigner/keyring"
 	"github.com/aakselrod/minimalsigner/proto"
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"gopkg.in/macaroon-bakery.v2/bakery"
@@ -45,7 +46,7 @@ var _ proto.WalletKitServer = (*walletKit)(nil)
 // perform any other tasks (such as coin selection, UTXO locking or
 // input/output/fee value validation, PSBT finalization). Any input that is
 // incomplete will be skipped.
-func (w *walletKit) SignPsbt(_ context.Context, req *proto.SignPsbtRequest) (
+func (w *walletKit) SignPsbt(ctx context.Context, req *proto.SignPsbtRequest) (
 	*proto.SignPsbtResponse, error) {
 
 	packet, err := psbt.NewFromRawBytes(
@@ -73,7 +74,12 @@ func (w *walletKit) SignPsbt(_ context.Context, req *proto.SignPsbtRequest) (
 	// Let the wallet do the heavy lifting. This will sign all inputs that
 	// we have the UTXO for. If some inputs can't be signed and don't have
 	// witness data attached, they will just be skipped.
-	signedInputs, err := w.server.keyRing.SignPsbt(packet)
+	keyRing := ctx.Value(keyRingKey).(*keyring.KeyRing)
+	if keyRing == nil {
+		return nil, fmt.Errorf("no node/coin from macaroon")
+	}
+
+	signedInputs, err := keyRing.SignPsbt(packet)
 	if err != nil {
 		return nil, fmt.Errorf("error signing PSBT: %v", err)
 	}
