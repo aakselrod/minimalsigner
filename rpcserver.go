@@ -169,6 +169,6 @@ func (r *rpcServer) SignMessage(ctx context.Context,
 		return nil, err
 	}
 
-	sigStr := zbase32.EncodeToString(sig.Serialize())
+	sigStr := zbase32.EncodeToString(sig)
 	return &proto.SignMessageResponse{Signature: sigStr}, nil
 }

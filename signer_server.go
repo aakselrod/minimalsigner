@@ -98,7 +98,7 @@ func (s *signerServer) SignMessage(ctx context.Context,
 		return nil, fmt.Errorf("can't sign the hash: %v", err)
 	}
 	return &proto.SignMessageResp{
-		Signature: sig.Serialize(),
+		Signature: sig,
 	}, nil
 }
 

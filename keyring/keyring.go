@@ -9,7 +9,6 @@ import (
 
 	"github.com/aakselrod/minimalsigner/vault"
 	"github.com/btcsuite/btcd/btcec/v2"
-	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/btcutil/psbt"
@@ -122,6 +121,8 @@ func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 		)
 	}
 
+	log.Tracef("Sending data %+v for signing request", reqData)
+
 	sharedKeyResp, err := k.client.Write(
 		"minimalsigner/lnd-nodes/ecdh",
 		reqData,
@@ -129,6 +130,8 @@ func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 	if err != nil {
 		return [32]byte{}, err
 	}
+
+	log.Tracef("Got data %+v in signing response", sharedKeyResp.Data)
 
 	sharedKeyHex, ok := sharedKeyResp.Data["sharedkey"].(string)
 	if !ok {
@@ -154,7 +157,7 @@ func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 // SignMessage signs the given message, single or double SHA256 hashing it
 // first, with the private key described in the key locator.
 func (k *KeyRing) SignMessage(keyLoc KeyLocator, msg []byte, doubleHash bool,
-	compact bool) (*ecdsa.Signature, error) {
+	compact bool) ([]byte, error) {
 
 	var digest []byte
 	if doubleHash {
@@ -180,6 +183,8 @@ func (k *KeyRing) SignMessage(keyLoc KeyLocator, msg []byte, doubleHash bool,
 		reqData["method"] = "ecdsa-compact"
 	}
 
+	log.Tracef("Sending data %+v for signing request", reqData)
+
 	signResp, err := k.client.Write(
 		"minimalsigner/lnd-nodes/sign",
 		reqData,
@@ -188,17 +193,14 @@ func (k *KeyRing) SignMessage(keyLoc KeyLocator, msg []byte, doubleHash bool,
 		return nil, err
 	}
 
+	log.Tracef("Got data %+v in signing response", signResp.Data)
+
 	signatureHex, ok := signResp.Data["signature"].(string)
 	if !ok {
 		return nil, errors.New("vault returned no signature")
 	}
 
-	signatureBytes, err := hex.DecodeString(signatureHex)
-	if err != nil {
-		return nil, err
-	}
-
-	return ecdsa.ParseSignature(signatureBytes)
+	return hex.DecodeString(signatureHex)
 }
 
 // SignMessageSchnorr signs the given message, single or double SHA256
@@ -231,6 +233,8 @@ func (k *KeyRing) SignMessageSchnorr(keyLoc KeyLocator, msg []byte,
 		reqData["taptweak"] = hex.EncodeToString(taprootTweak)
 	}
 
+	log.Tracef("Sending data %+v for signing request", reqData)
+
 	signResp, err := k.client.Write(
 		"minimalsigner/lnd-nodes/sign",
 		reqData,
@@ -238,6 +242,8 @@ func (k *KeyRing) SignMessageSchnorr(keyLoc KeyLocator, msg []byte,
 	if err != nil {
 		return nil, err
 	}
+
+	log.Tracef("Got data %+v in signing response", signResp.Data)
 
 	signatureHex, ok := signResp.Data["signature"].(string)
 	if !ok {
