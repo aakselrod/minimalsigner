@@ -443,12 +443,17 @@ func (k *KeyRing) signSegWitV0(in *psbt.PInput, tx *wire.MsgTx,
 			idx, err)
 	}
 
+	log.Tracef("Got input %+v for signing with unknowns %+v", in,
+		in.Unknowns)
+
 	reqData := map[string]interface{}{
 		"node":   k.node,
 		"path":   sliceUint32ToInt(in.Bip32Derivation[0].Bip32Path),
 		"method": "ecdsa",
 		"digest": hex.EncodeToString(digest),
 	}
+
+	getTweakParams(in.Unknowns, reqData)
 
 	log.Tracef("Sending data %+v for signing request", reqData)
 

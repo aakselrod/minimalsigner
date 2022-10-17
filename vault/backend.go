@@ -358,10 +358,6 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 	}
 
 	switch {
-	// No tweaks if we aren't using Schnorr.
-	case signMethod != "schnorr":
-		break
-
 	// Single commitment tweak as used by SignPsbt.
 	case len(singleTweakHex) > 0:
 		singleTweakBytes, err := hex.DecodeString(singleTweakHex)
