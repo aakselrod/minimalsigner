@@ -175,7 +175,7 @@ func (b *backend) ecdh(ctx context.Context, req *logical.Request,
 	peerPubHex := data.Get("peer").(string)
 	if len(peerPubHex) != 2*btcec.PubKeyBytesLenCompressed {
 		b.Logger().Error("Peer pubkey is wrong length",
-			"node", peerPubHex)
+			"peer", peerPubHex)
 		return nil, errors.New("invalid peer pubkey")
 	}
 
@@ -221,7 +221,7 @@ func (b *backend) ecdh(ctx context.Context, req *logical.Request,
 	if err != nil {
 		// We log here as warning because there's no case when we
 		// should be using ECDH with a mismatching own key.
-		b.Logger().Info("Pubkey mismatch",
+		b.Logger().Warn("Pubkey mismatch",
 			"node", strNode, "error", err)
 		return nil, err
 	}
@@ -338,24 +338,29 @@ func (b *backend) deriveAndSign(ctx context.Context, req *logical.Request,
 
 	signMethod := data.Get("method").(string)
 
-	switch {
-	// No tweaks if we aren't using Schnorr.
-	case signMethod != "schnorr":
-		break
-
 	// Taproot tweak.
-	case len(tapTweakHex) > 0:
-		tapTweakBytes, err := hex.DecodeString(tapTweakHex)
+	var tapTweakBytes []byte
+
+	if len(tapTweakHex) > 0 {
+		tapTweakBytes, err = hex.DecodeString(tapTweakHex)
 		if err != nil {
 			b.Logger().Error("Couldn't decode taptweak hex",
 				"error", err)
 			return nil, err
 		}
+	}
 
+	if signMethod == "schnorr" {
 		ecPrivKey = txscript.TweakTaprootPrivKey(
 			ecPrivKey,
 			tapTweakBytes,
 		)
+	}
+
+	switch {
+	// No tweaks if we aren't using Schnorr.
+	case signMethod != "schnorr":
+		break
 
 	// Single commitment tweak as used by SignPsbt.
 	case len(singleTweakHex) > 0:

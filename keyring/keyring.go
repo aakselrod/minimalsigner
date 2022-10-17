@@ -113,6 +113,7 @@ func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 			0, // Only external branch in LN purpose.
 			int(keyDesc.Index),
 		},
+		"peer": hex.EncodeToString(pub.SerializeCompressed()),
 	}
 
 	if keyDesc.PubKey != nil {
@@ -374,7 +375,7 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 
 		signedInputs = append(signedInputs, uint32(idx))
 
-		newTx := packet.UnsignedTx.Copy()
+		/* newTx := packet.UnsignedTx.Copy()
 		newTx.TxIn[0].SignatureScript = in.RedeemScript
 		newTx.TxIn[0].Witness = wire.TxWitness{
 			in.PartialSigs[0].Signature,
@@ -405,7 +406,7 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 			continue
 		}
 
-		log.Infof("Succeeded executing engine")
+		log.Infof("Succeeded executing engine") */
 	}
 
 	return signedInputs, nil
@@ -514,6 +515,8 @@ func (k *KeyRing) signSegWitV1KeySpend(in *psbt.PInput, tx *wire.MsgTx,
 
 	getTweakParams(in.Unknowns, reqData)
 
+	log.Tracef("Sending data %+v for signing request", reqData)
+
 	signResp, err := k.client.Write(
 		"minimalsigner/lnd-nodes/sign",
 		reqData,
@@ -566,6 +569,8 @@ func (k *KeyRing) signSegWitV1ScriptSpend(in *psbt.PInput, tx *wire.MsgTx,
 	}
 
 	getTweakParams(in.Unknowns, reqData)
+
+	log.Tracef("Sending data %+v for signing request", reqData)
 
 	signResp, err := k.client.Write(
 		"minimalsigner/lnd-nodes/sign",
