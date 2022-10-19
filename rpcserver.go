@@ -3,6 +3,7 @@ package minimalsigner
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/aakselrod/minimalsigner/keyring"
 	"github.com/aakselrod/minimalsigner/proto"
@@ -59,6 +60,16 @@ type rpcServer struct {
 	checker *bakery.Checker
 
 	cfg *Config
+
+	// stateMtx is used to synchronize access to state.
+	//
+	// TODO(aakselrod): extract this into its own object and/or package
+	// for policy enforcement.
+	stateMtx sync.RWMutex
+
+	// TODO(aakselrod): populate initial node state from watch-only lnd
+	// instances or at least from vault.
+	nodes map[string]*nodeInfo
 }
 
 // A compile time check to ensure that rpcServer fully implements the
@@ -76,6 +87,7 @@ func newRPCServer(cfg *Config, c *api.Logical,
 		client:  c,
 		checker: checker,
 		perms:   make(map[string][]bakery.Op),
+		nodes:   make(map[string]*nodeInfo),
 	}
 }
 
@@ -91,6 +103,11 @@ func (r *rpcServer) intercept(ctx context.Context, req interface{},
 	}
 
 	keyRing := keyring.NewKeyRing(r.client, node, coin)
+
+	err = r.enforcePolicy(ctx, keyRing, req)
+	if err != nil {
+		return nil, err
+	}
 
 	return handler(
 		context.WithValue(ctx, keyRingKey, keyRing),

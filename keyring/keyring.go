@@ -121,7 +121,7 @@ func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 		)
 	}
 
-	log.Tracef("Sending data %+v for signing request", reqData)
+	log.Tracef("Sending data %+v for shared key request", reqData)
 
 	sharedKeyResp, err := k.client.Write(
 		"minimalsigner/lnd-nodes/ecdh",
@@ -131,7 +131,7 @@ func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 		return [32]byte{}, err
 	}
 
-	log.Tracef("Got data %+v in signing response", sharedKeyResp.Data)
+	log.Tracef("Got data %+v in shared key response", sharedKeyResp.Data)
 
 	sharedKeyHex, ok := sharedKeyResp.Data["sharedkey"].(string)
 	if !ok {
@@ -303,37 +303,6 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 			continue
 		}
 
-		/*// Let's try and derive the key now. This method will decide if
-		// it's a BIP49/84 key for normal on-chain funds or a key of the
-		// custom purpose 1017 key scope.
-		derivationInfo := in.Bip32Derivation[0]
-		privKey, err := k.deriveKeyByBIP32Path(derivationInfo.Bip32Path)
-		if err != nil {
-			log.Warnf("SignPsbt: Skipping input %d, error "+
-				"deriving signing key: %v", idx, err)
-			continue
-		}
-
-		// We need to make sure we actually derived the key that was
-		// expected to be derived.
-		pubKeysEqual := bytes.Equal(
-			derivationInfo.PubKey,
-			privKey.PubKey().SerializeCompressed(),
-		)
-		if !pubKeysEqual {
-			log.Warnf("SignPsbt: Skipping input %d, derived "+
-				"public key %x does not match bip32 "+
-				"derivation info public key %x", idx,
-				privKey.PubKey().SerializeCompressed(),
-				derivationInfo.PubKey)
-			continue
-		}
-
-		// Do we need to tweak anything? Single or double tweaks are
-		// sent as custom/proprietary fields in the PSBT input section.
-		privKey = maybeTweakPrivKeyPsbt(in.Unknowns, privKey)
-		*/
-
 		// What kind of signature is expected from us and do we have all
 		// information we need?
 		signMethod, err := validateSigningMethod(in)
@@ -380,39 +349,6 @@ func (k *KeyRing) SignPsbt(packet *psbt.Packet) ([]uint32, error) {
 		}
 
 		signedInputs = append(signedInputs, uint32(idx))
-
-		/* newTx := packet.UnsignedTx.Copy()
-		newTx.TxIn[0].SignatureScript = in.RedeemScript
-		newTx.TxIn[0].Witness = wire.TxWitness{
-			in.PartialSigs[0].Signature,
-			in.PartialSigs[0].PubKey,
-		}
-
-		log.Infof("Executing engine on tx input %+v (from %+v)",
-			newTx.TxIn[0], in)
-
-		engine, err := txscript.NewEngine(
-			in.WitnessUtxo.PkScript,
-			newTx,
-			idx,
-			txscript.StandardVerifyFlags,
-			txscript.NewSigCache(10),
-			sigHashes,
-			in.WitnessUtxo.Value,
-			prevOutputFetcher,
-		)
-		if err != nil {
-			log.Errorf("Error creating engine: %v", err)
-			continue
-		}
-
-		err = engine.Execute()
-		if err != nil {
-			log.Errorf("Error executing engine: %v", err)
-			continue
-		}
-
-		log.Infof("Succeeded executing engine") */
 	}
 
 	return signedInputs, nil
@@ -618,10 +554,6 @@ func (k *KeyRing) signSegWitV1ScriptSpend(in *psbt.PInput, tx *wire.MsgTx,
 // depending on the type of input that should be signed.
 func prepareScriptsV0(in *psbt.PInput) []byte {
 	switch {
-	// It's a NP2WKH input:
-	//case len(in.RedeemScript) > 0:
-	//	return in.RedeemScript
-
 	// It's a P2WSH input:
 	case len(in.WitnessScript) > 0:
 		return in.WitnessScript
