@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/btcsuite/btcd/wire"
 	"github.com/hashicorp/vault/api"
 	"github.com/lightningnetwork/lnd/cert"
 	"google.golang.org/grpc"
@@ -87,8 +88,8 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 	case cfg.SigNet:
 		network = "signet"
 
-	case cfg.MainNet:
-		network = "mainnet"
+		/*case cfg.MainNet:
+		network = "mainnet"*/
 	}
 
 	signerLog.Infof("Active chain: %v (network=%v)", "bitcoin", network)
@@ -110,29 +111,42 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 		return mkErr("error getting list of lnd nodes: %v", err)
 	}
 
-	// If we're asked to output a watch-only account list, do it here.
-	if cfg.OutputAccounts != "" {
-		for node := range nodeListResp.Data {
-			listAcctsResp, err := signerClient.ReadWithData(
-				"minimalsigner/lnd-nodes/accounts",
-				map[string][]string{
-					"node": []string{node},
-				},
-			)
-			if err != nil {
-				return mkErr("error listing accounts for "+
-					"node %s: %v", node, err)
-			}
+	nodes := make(map[string]*nodeInfo)
 
-			acctList, ok := listAcctsResp.Data["acctList"]
-			if !ok {
-				return mkErr("accounts not returned for "+
-					"node %s", node)
-			}
+	for node := range nodeListResp.Data {
+		listAcctsResp, err := signerClient.ReadWithData(
+			"minimalsigner/lnd-nodes/accounts",
+			map[string][]string{
+				"node": []string{node},
+			},
+		)
+		if err != nil {
+			return mkErr("error listing accounts for node %s: %v",
+				node, err)
+		}
 
+		acctList, ok := listAcctsResp.Data["acctList"].(string)
+		if !ok {
+			return mkErr("accounts not returned for node %s", node)
+		}
+
+		accounts, err := getAccounts(acctList)
+		if err != nil {
+			return mkErr("couldn't parse account list for node %s",
+				node)
+		}
+
+		nodes[node] = &nodeInfo{
+			channels: make(map[wire.OutPoint]*chanInfo),
+			accounts: accounts,
+		}
+
+		// If we're asked to output a watch-only account list, do it
+		// here.
+		if cfg.OutputAccounts != "" {
 			err = os.WriteFile(
 				cfg.OutputAccounts+"."+node,
-				[]byte(acctList.(string)),
+				[]byte(acctList),
 				outputFilePermissions,
 			)
 			if err != nil {

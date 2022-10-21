@@ -91,6 +91,17 @@ func NewKeyRing(client *api.Logical, node string, coin int) *KeyRing {
 	}
 }
 
+// Node returns the node's pubkey as a hex-encoded string.
+func (k *KeyRing) Node() string {
+	return k.node
+}
+
+// Coin returns the node's HDCoinType as an int. It must be converted to a
+// uint32 and hardened before use in a derivation path.
+func (k *KeyRing) Coin() int {
+	return k.coin
+}
+
 // ECDH performs a scalar multiplication (ECDH-like operation) between the
 // target key descriptor and remote public key. The output returned will be
 // the sha256 of the resulting shared point serialized in compressed format. If
@@ -101,7 +112,6 @@ func NewKeyRing(client *api.Logical, node string, coin int) *KeyRing {
 func (k *KeyRing) ECDH(keyDesc KeyDescriptor, pub *btcec.PublicKey) ([32]byte,
 	error) {
 
-	// TODO(aakselrod): do descriptor pubkey check on ECDH.
 	reqData := map[string]interface{}{
 		"node": k.node,
 		"path": []int{

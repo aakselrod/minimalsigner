@@ -102,12 +102,12 @@ func (r *rpcServer) intercept(ctx context.Context, req interface{},
 		return nil, err
 	}
 
-	keyRing := keyring.NewKeyRing(r.client, node, coin)
-
-	err = r.enforcePolicy(ctx, keyRing, req)
+	err = r.enforcePolicy(ctx, node, req)
 	if err != nil {
 		return nil, err
 	}
+
+	keyRing := keyring.NewKeyRing(r.client, node, coin)
 
 	return handler(
 		context.WithValue(ctx, keyRingKey, keyRing),

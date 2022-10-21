@@ -99,7 +99,7 @@ type Config struct {
 
 	DebugLevel string `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical}"`
 
-	MainNet  bool `long:"mainnet" description:"NOT RECOMMENDED: Use the main network"`
+	// MainNet  bool `long:"mainnet" description:"NOT RECOMMENDED: Use the main network"`
 	TestNet3 bool `long:"testnet" description:"Use the test network"`
 	SimNet   bool `long:"simnet" description:"Use the simulation test network"`
 	RegTest  bool `long:"regtest" description:"Use the regression test network"`
@@ -299,10 +299,10 @@ func ValidateConfig(cfg Config, fileParser, flagParser *flags.Parser) (
 	// number of network flags passed; assign active network params
 	// while we're at it.
 	numNets := 0
-	if cfg.MainNet {
+	/*if cfg.MainNet {
 		numNets++
 		cfg.ActiveNetParams = chaincfg.MainNetParams
-	}
+	}*/
 	if cfg.TestNet3 {
 		numNets++
 		cfg.ActiveNetParams = chaincfg.TestNet3Params
