@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/aakselrod/minimalsigner/proto"
+	"github.com/aakselrod/minimalsigner/vault"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/btcutil/psbt"
 	"github.com/btcsuite/btcd/wire"
@@ -23,12 +27,14 @@ type acctInfo struct {
 type nodeInfo struct {
 	sync.RWMutex
 
+	// node is the hex pubkey of the node.
+	node string
+
 	// accounts is a mapping by derivation of the node's account extended
 	// public keys. The path elements are all hardened.
 	accounts map[[3]uint32]*hdkeychain.ExtendedKey
 
-	// TODO(aakselrod): populate initial channel state from watch-only lnd
-	// instances.
+	// channels is a mapping by channel point of channel info structs.
 	channels map[wire.OutPoint]*chanInfo
 }
 
@@ -44,7 +50,7 @@ func (r *rpcServer) getNodeInfo(node string) (*nodeInfo, error) {
 	// We didn't find our node info already cached, so get it from the
 	// vault.
 	info = &nodeInfo{
-		// TODO(aakselrod): get the channels from somewhere.
+		node:     node,
 		channels: make(map[wire.OutPoint]*chanInfo),
 	}
 
@@ -80,7 +86,7 @@ func (r *rpcServer) getNodeInfo(node string) (*nodeInfo, error) {
 func (r *rpcServer) enforcePolicy(ctx context.Context, node string,
 	req interface{}) error {
 
-	ni, err := r.getNodeInfo(node)
+	info, err := r.getNodeInfo(node)
 	if err != nil {
 		return err
 	}
@@ -88,7 +94,7 @@ func (r *rpcServer) enforcePolicy(ctx context.Context, node string,
 	switch req.(type) {
 
 	case *proto.SignPsbtRequest:
-		return r.enforcePsbt(ctx, ni, req.(*proto.SignPsbtRequest))
+		return r.enforcePsbt(ctx, info, req.(*proto.SignPsbtRequest))
 	}
 
 	return nil
@@ -109,9 +115,30 @@ func (r *rpcServer) enforcePsbt(ctx context.Context, node *nodeInfo,
 	signerLog.Debugf("Got PSBT packet to sign with unsigned TX: %s",
 		spew.Sdump(packet.UnsignedTx))
 
-	if len(packet.UnsignedTx.TxIn) != 1 {
+	if len(packet.UnsignedTx.TxIn) != 1 || len(packet.Inputs) != 1 {
 		// Single input for channel update should be channel point, so
 		// this must be an on-chain spend.
+		return r.enforceOnChainPolicy(ctx, packet, node)
+	}
+
+	derPaths := packet.Inputs[0].Bip32Derivation
+	if len(derPaths) != 1 {
+		// We expect exactly one derivation path for a channel update.
+		return r.enforceChainPolicy(ctx, packet, node)
+	}
+
+	if len(derPaths[0]) != 5 {
+		return fmt.Errorf("invalid derivation path in PSBT request")
+	}
+
+	if derPaths[0][0] != vault.Bip0043purpose+
+		hdkeychain.HardenedKeyStart || // Channel update for LN.
+		derPaths[0][1] != nodeInfo.coin+
+			hdkeychain.HardenedKeyStart || // Coin type must match.
+		derPaths[0][2] != hdkeychain.HardenedKeyStart { // Multisig.
+
+		// Not deriving from the correct account to sign for a
+		// channel point.
 		return r.enforceOnChainPolicy(ctx, packet, node)
 	}
 
@@ -149,20 +176,22 @@ func (r *rpcServer) getChanInfo(ctx context.Context, packet *psbt.Packet,
 		return info, nil
 	}
 
-	// We try to guess the to-us and to-them pubkeys used for refund
-	// outputs so we can track money flows as we update state.
+	// Read node's channel backup file. We add a suffix for the specific
+	// node, just as we do when writing a macaroon or accounts file.
+	// We expect that this is updated every time a new channel is opened.
+	// This makes it easy to use a symlink in local testing, but requires
+	// production deployments to somehow get the backup file to the signer
+	// after each channel opening.
 	//
-	// TODO(aakselrod): FIX THIS. This assumes that:
-	// - the outputs are sorted correctly from smallest to largest
-	// - the two largest outputs are
-	// var ourScript, theirScript *btcec.PublicKey
-
-	for range packet.UnsignedTx.TxOut[len(
-		packet.UnsignedTx.TxOut)-2:] {
-
+	// TODO(aakselrod): better integration here.
+	chbuBytes, err := os.ReadFile(r.cfg.ChannelBackup + "." + node.node)
+	if err != nil {
+		return nil, err
 	}
 
-	node.Lock()
+	branchKey, err :=
+
+		node.Lock()
 	node.channels[packet.UnsignedTx.TxIn[0].PreviousOutPoint] = info
 	node.Unlock()
 
@@ -198,12 +227,40 @@ func getAccounts(acctList string) (map[[3]uint32]*hdkeychain.ExtendedKey,
 			return nil, fmt.Errorf("account has no extended pubkey")
 		}
 
+		xPub, err := hdkeychain.NewKeyFromString(strKey)
+		if err != nil {
+			return nil, err
+		}
+
 		strDerPath, ok := acctEl["derivation_path"].(string)
 		if !ok {
 			return nil, fmt.Errorf("account has no derivation path")
 		}
+
+		pathEls := strings.Split(strDerPath, "/")
+		if len(pathEls) != 4 || pathEls[0] != "m" {
+			return nil, fmt.Errorf("invalid derivation path")
+		}
+
+		var derPath [3]uint32
+		for idx, el := range pathEls[1:] {
+			if !strings.HasPrefix(el, "'") {
+				return nil, fmt.Errorf("acct derivation path "+
+					"element %d not hardened", idx)
+			}
+
+			intEl, err := strconv.ParseUint(el[:len(el)-1])
+			if err != nil {
+				return nil, err
+			}
+
+			derPath[idx] = uint32(intEl) +
+				hdkeychain.HardenedKeyStart
+		}
+
+		accounts[derPath] = xPub
 	}
 
-	return nil, nil
+	return accounts, nil
 
 }

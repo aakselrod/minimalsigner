@@ -137,6 +137,7 @@ func Main(cfg *Config, lisCfg ListenerCfg) error {
 		}
 
 		nodes[node] = &nodeInfo{
+			node:     node,
 			channels: make(map[wire.OutPoint]*chanInfo),
 			accounts: accounts,
 		}

@@ -21,14 +21,15 @@ import (
 )
 
 const (
-	defaultConfigFilename  = "signer.conf"
-	defaultTLSCertFilename = "tls.cert"
-	defaultTLSKeyFilename  = "tls.key"
-	defaultLogLevel        = "info"
-	defaultLogDirname      = "logs"
-	defaultLogFilename     = "signer.log"
-	defaultRPCPort         = 10009
-	defaultRPCHost         = "localhost"
+	defaultConfigFilename     = "signer.conf"
+	defaultChanBackupFilename = "channel.backup"
+	defaultTLSCertFilename    = "tls.cert"
+	defaultTLSKeyFilename     = "tls.key"
+	defaultLogLevel           = "info"
+	defaultLogDirname         = "logs"
+	defaultLogFilename        = "signer.log"
+	defaultRPCPort            = 10009
+	defaultRPCHost            = "localhost"
 
 	defaultMaxLogFiles    = 3
 	defaultMaxLogFileSize = 10
@@ -49,22 +50,26 @@ const (
 )
 
 var (
-	// DefaultSignerDir is the default directory where lnd tries to find its
+	// defaultSignerDir is the default directory where lnd tries to find its
 	// configuration file and store its data. This is a directory in the
 	// user's application data, for example:
 	//   C:\Users\<username>\AppData\Local\Signer on Windows
 	//   ~/.signer on Linux
 	//   ~/Library/Application Support/Signer on MacOS
-	DefaultSignerDir = btcutil.AppDataDir("signer", false)
+	defaultSignerDir = btcutil.AppDataDir("signer", false)
 
-	// DefaultConfigFile is the default full path of lnd's configuration
+	// defaultConfigFile is the default full path of lnd's configuration
 	// file.
-	DefaultConfigFile = filepath.Join(DefaultSignerDir, defaultConfigFilename)
+	defaultConfigFile = filepath.Join(defaultSignerDir, defaultConfigFilename)
 
-	defaultLogDir = filepath.Join(DefaultSignerDir, defaultLogDirname)
+	// defaultChanBackup is the default full path of the channel backup
+	// file for the node.
+	defaultChanBackupFile = filepath.Join(defaultSignerDir, defaultChanBackupFilename)
 
-	defaultTLSCertPath = filepath.Join(DefaultSignerDir, defaultTLSCertFilename)
-	defaultTLSKeyPath  = filepath.Join(DefaultSignerDir, defaultTLSKeyFilename)
+	defaultLogDir = filepath.Join(defaultSignerDir, defaultLogDirname)
+
+	defaultTLSCertPath = filepath.Join(defaultSignerDir, defaultTLSCertFilename)
+	defaultTLSKeyPath  = filepath.Join(defaultSignerDir, defaultTLSKeyFilename)
 )
 
 // Config defines the configuration options for lnd.
@@ -85,6 +90,7 @@ type Config struct {
 
 	OutputMacaroon string `long:"outputmacaroon" description:"Path to write a signer macaroon for the watch-only node"`
 	OutputAccounts string `long:"outputaccounts" description:"Path to write a JSON file with xpubs for the watch-only node"`
+	ChanBackup     string `long:"chanbackup" description:"Path to channel.backup file for the watch-only node"`
 
 	LogDir         string `long:"logdir" description:"Directory to log output."`
 	MaxLogFiles    int    `long:"maxlogfiles" description:"Maximum logfiles to keep (0 for no rotation)"`
@@ -118,8 +124,9 @@ type Config struct {
 // DefaultConfig returns all default values for the Config struct.
 func DefaultConfig() Config {
 	return Config{
-		SignerDir:       DefaultSignerDir,
-		ConfigFile:      DefaultConfigFile,
+		SignerDir:       defaultSignerDir,
+		ChanBackup:      defaultChanBackupFile,
+		ConfigFile:      defaultConfigFile,
 		DebugLevel:      defaultLogLevel,
 		TLSCertPath:     defaultTLSCertPath,
 		TLSKeyPath:      defaultTLSKeyPath,
@@ -161,8 +168,8 @@ func LoadConfig() (*Config, error) {
 	switch {
 	// User specified --lnddir but no --configfile. Update the config file
 	// path to the lnd config directory, but don't require it to exist.
-	case configFileDir != DefaultSignerDir &&
-		configFilePath == DefaultConfigFile:
+	case configFileDir != defaultSignerDir &&
+		configFilePath == defaultConfigFile:
 
 		configFilePath = filepath.Join(
 			configFileDir, defaultConfigFilename,
@@ -170,7 +177,7 @@ func LoadConfig() (*Config, error) {
 
 	// User did specify an explicit --configfile, so we check that it does
 	// exist under that path to avoid surprises.
-	case configFilePath != DefaultConfigFile:
+	case configFilePath != defaultConfigFile:
 		if !fileExists(configFilePath) {
 			return nil, fmt.Errorf("specified config file does "+
 				"not exist in %s", configFilePath)
@@ -257,7 +264,7 @@ func ValidateConfig(cfg Config, fileParser, flagParser *flags.Parser) (
 	// If the provided lnd directory is not the default, we'll modify the
 	// path to all of the files and directories that will live within it.
 	signerDir := CleanAndExpandPath(cfg.SignerDir)
-	if signerDir != DefaultSignerDir {
+	if signerDir != defaultSignerDir {
 		cfg.TLSCertPath = filepath.Join(signerDir, defaultTLSCertFilename)
 		cfg.TLSKeyPath = filepath.Join(signerDir, defaultTLSKeyFilename)
 		cfg.LogDir = filepath.Join(signerDir, defaultLogDirname)
@@ -379,6 +386,8 @@ func ValidateConfig(cfg Config, fileParser, flagParser *flags.Parser) (
 	}
 
 	cfg.OutputMacaroon = CleanAndExpandPath(cfg.OutputMacaroon)
+
+	cfg.ChanBackup = CleanAndExpandPath(cfg.ChanBackup)
 
 	// All good, return the sanitized result.
 	return &cfg, nil
